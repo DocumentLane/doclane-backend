@@ -3,6 +3,9 @@
   "rootDir": ".",
   "testEnvironment": "node",
   "testRegex": ".e2e-spec.ts$",
+  "moduleNameMapper": {
+    "^openid-client$": "<rootDir>/openid-client.mock.ts"
+  },
   "transform": {
     "^.+\\.(t|j)s$": "ts-jest"
   }
