@@ -16,16 +16,69 @@ enum UserRole {
   USER
 }
 
+enum DocumentStatus {
+  UPLOAD_PENDING
+  UPLOADED
+  METADATA_PROCESSING
+  READY
+  PROCESSING_FAILED
+  DELETED
+}
+
+enum DocumentOcrStatus {
+  NOT_REQUIRED
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum DocumentLinearizationStatus {
+  PENDING
+  PROCESSING
+  READY
+  UNAVAILABLE
+  FAILED
+}
+
+enum DocumentJobType {
+  PDF_METADATA
+  PDF_PAGE_DERIVATIVE
+  PDF_OCR
+}
+
+enum DocumentJobStatus {
+  QUEUED
+  ACTIVE
+  RETRYING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum DocumentJobLogLevel {
+  INFO
+  WARN
+  ERROR
+}
+
+enum DocumentPageDerivativeKind {
+  THUMBNAIL
+  PREVIEW
+}
+
 model User {
-  id            String   @id @default(uuid())
-  oidcIssuer    String
-  oidcSubject   String
-  email         String?
-  displayName   String?
-  role          UserRole @default(USER)
-  authorizedAt  DateTime @default(now())
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id           String   @id @default(uuid())
+  oidcIssuer   String
+  oidcSubject  String
+  email        String?
+  displayName  String?
+  role         UserRole @default(USER)
+  authorizedAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  documents Document[]
 
   @@unique([oidcIssuer, oidcSubject])
   @@index([email])
@@ -40,4 +93,189 @@ model OidcAuthorizationState {
   createdAt    DateTime @default(now())
 
   @@index([expiresAt])
+}
+
+model WorkerSettings {
+  id                  String   @id @default("global")
+  ocrLanguage         String   @default("eng")
+  ocrDpi              Int      @default(300)
+  ocrPsm              Int      @default(6)
+  ocrPdfOutputEnabled Boolean  @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@map("worker_settings")
+}
+
+model Document {
+  id                  String                      @id @default(uuid())
+  ownerId             String
+  title               String
+  originalFileName    String
+  contentType         String                      @default("application/pdf")
+  sizeBytes           BigInt?
+  checksumSha256      String?
+  storageBucket       String
+  originalObjectKey   String                      @unique
+  linearizedObjectKey String?                     @unique
+  linearizedSizeBytes BigInt?
+  linearizedAt        DateTime?
+  linearizationStatus DocumentLinearizationStatus @default(PENDING)
+  ocrObjectKey        String?                     @unique
+  ocrLinearized       Boolean                     @default(false)
+  ocrSizeBytes        BigInt?
+  ocrChecksumSha256   String?
+  ocrCompletedAt      DateTime?
+  status              DocumentStatus              @default(UPLOAD_PENDING)
+  ocrStatus           DocumentOcrStatus           @default(PENDING)
+  pageCount           Int?
+  lastReadPageNumber  Int?
+  hasTextLayer        Boolean?
+  uploadExpiresAt     DateTime?
+  uploadedAt          DateTime?
+  metadataExtractedAt DateTime?
+  deletedAt           DateTime?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  owner     User               @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  pages     DocumentPage[]
+  jobs      DocumentJob[]
+  bookmarks DocumentBookmark[]
+  notes     DocumentNote[]
+
+  @@index([ownerId, createdAt])
+  @@index([status])
+  @@index([ocrStatus])
+  @@index([linearizationStatus])
+  @@map("documents")
+}
+
+model DocumentBookmark {
+  id         String   @id @default(uuid())
+  documentId String
+  pageNumber Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, pageNumber])
+  @@index([documentId])
+  @@map("document_bookmarks")
+}
+
+model DocumentNote {
+  id         String   @id @default(uuid())
+  documentId String
+  pageNumber Int
+  content    String   @db.Text
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, pageNumber])
+  @@index([documentId])
+  @@map("document_notes")
+}
+
+model DocumentPage {
+  id           String   @id @default(uuid())
+  documentId   String
+  pageNumber   Int
+  width        Float
+  height       Float
+  rotation     Int      @default(0)
+  hasTextLayer Boolean?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  document    Document                 @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  derivatives DocumentPageDerivative[]
+  ocr         DocumentPageOcr?
+
+  @@unique([documentId, pageNumber])
+  @@index([documentId])
+  @@map("document_pages")
+}
+
+model DocumentPageDerivative {
+  id            String                     @id @default(uuid())
+  pageId        String
+  kind          DocumentPageDerivativeKind
+  storageBucket String
+  objectKey     String                     @unique
+  contentType   String
+  width         Int?
+  height        Int?
+  sizeBytes     BigInt?
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  page DocumentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@unique([pageId, kind])
+  @@index([kind])
+  @@map("document_page_derivatives")
+}
+
+model DocumentPageOcr {
+  id         String   @id @default(uuid())
+  pageId     String   @unique
+  text       String   @db.Text
+  language   String?
+  confidence Float?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  page DocumentPage @relation(fields: [pageId], references: [id], onDelete: Cascade)
+
+  @@map("document_page_ocr")
+}
+
+model DocumentJob {
+  id                String            @id @default(uuid())
+  documentId        String
+  type              DocumentJobType
+  status            DocumentJobStatus @default(QUEUED)
+  queueName         String
+  bullJobId         String?
+  attempts          Int               @default(0)
+  maxAttempts       Int               @default(3)
+  progressPercent   Int               @default(0)
+  currentPageNumber Int?
+  completedPages    Int               @default(0)
+  totalPages        Int?
+  payload           Json?
+  result            Json?
+  errorCode         String?
+  errorMessage      String?           @db.Text
+  queuedAt          DateTime          @default(now())
+  startedAt         DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  document Document         @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  logs     DocumentJobLog[]
+
+  @@index([documentId, type])
+  @@index([status, queuedAt])
+  @@index([queueName, status])
+  @@map("document_jobs")
+}
+
+model DocumentJobLog {
+  id        String              @id @default(uuid())
+  jobId     String
+  level     DocumentJobLogLevel @default(INFO)
+  message   String              @db.Text
+  metadata  Json?
+  createdAt DateTime            @default(now())
+
+  job DocumentJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, createdAt])
+  @@map("document_job_logs")
 }

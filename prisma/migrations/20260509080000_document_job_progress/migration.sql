@@ -1,0 +1,5 @@
+ALTER TABLE "document_jobs"
+ADD COLUMN "progressPercent" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "currentPageNumber" INTEGER,
+ADD COLUMN "completedPages" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "totalPages" INTEGER;

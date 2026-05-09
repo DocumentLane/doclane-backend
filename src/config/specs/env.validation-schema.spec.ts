@@ -7,7 +7,13 @@ describe('environmentValidationSchema', () => {
     });
 
     expect(result.error).toBeUndefined();
-    expect(result.value).toMatchObject({ PORT: 3000 });
+    expect(result.value).toMatchObject({
+      PORT: 3000,
+      PDF_OCR_LANGUAGE: 'eng',
+      PDF_OCR_DPI: 300,
+      PDF_OCR_PSM: 6,
+      PDF_OCR_PDF_OUTPUT_ENABLED: true,
+    });
   });
 
   it('rejects an invalid S3 endpoint', () => {

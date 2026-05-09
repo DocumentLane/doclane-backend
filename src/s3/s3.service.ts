@@ -23,6 +23,8 @@ export class S3Service {
       new GetObjectCommand({
         Bucket: this.getBucket(),
         Key: options.key,
+        ResponseContentDisposition: options.responseContentDisposition,
+        ResponseContentType: options.responseContentType,
       }),
       { expiresIn: options.expiresInSeconds ?? 300 },
     );
@@ -38,6 +40,10 @@ export class S3Service {
       }),
       { expiresIn: options.expiresInSeconds ?? 300 },
     );
+  }
+
+  getDefaultBucket(): string {
+    return this.getBucket();
   }
 
   private createClientConfig(): S3ClientConfig {
