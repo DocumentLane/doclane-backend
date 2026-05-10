@@ -75,6 +75,17 @@ export class DocumentsController {
     );
   }
 
+  @Get('statuses')
+  @SerializeOptions({ type: DocumentStatusResponseDto })
+  listStatuses(
+    @Req() request: AuthenticatedRequest,
+  ): Promise<DocumentStatusResponse[]> {
+    return this.documentsService.listStatuses(
+      request.user.sub,
+      request.user.role,
+    );
+  }
+
   @Get(':id')
   @SerializeOptions({ type: DocumentResponseDto })
   getDocument(
@@ -182,6 +193,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       dto.pageNumber,
+      request.user.role,
     );
   }
 
@@ -309,7 +321,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentBookmarkResponse[]> {
-    return this.documentsService.listBookmarks(request.user.sub, documentId);
+    return this.documentsService.listBookmarks(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 
   @Put(':id/bookmarks/:pageNumber')
@@ -323,6 +339,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       pageNumber,
+      request.user.role,
     );
   }
 
@@ -336,6 +353,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       pageNumber,
+      request.user.role,
     );
   }
 
@@ -345,7 +363,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentNoteResponse[]> {
-    return this.documentsService.listNotes(request.user.sub, documentId);
+    return this.documentsService.listNotes(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 
   @Put(':id/notes/:pageNumber')
@@ -361,6 +383,7 @@ export class DocumentsController {
       documentId,
       pageNumber,
       dto.content,
+      request.user.role,
     );
   }
 
@@ -374,6 +397,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       pageNumber,
+      request.user.role,
     );
   }
 

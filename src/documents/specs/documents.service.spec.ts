@@ -54,6 +54,11 @@ describe('DocumentsService', () => {
     documentPageDerivative: {
       upsert: jest.Mock;
     };
+    documentReadingPosition: {
+      findUnique: jest.Mock;
+      findMany: jest.Mock;
+      upsert: jest.Mock;
+    };
     documentPermission: {
       upsert: jest.Mock;
       deleteMany: jest.Mock;
@@ -126,6 +131,11 @@ describe('DocumentsService', () => {
         deleteMany: jest.fn(),
       },
       documentPageDerivative: {
+        upsert: jest.fn(),
+      },
+      documentReadingPosition: {
+        findUnique: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
         upsert: jest.fn(),
       },
       documentPermission: {
@@ -302,6 +312,124 @@ describe('DocumentsService', () => {
         ownerId: 'user-1',
         deletedAt: null,
         folderId: null,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  it('gets document status with status job fields only', async () => {
+    const job = createDocumentStatusJob({
+      id: 'metadata-job-1',
+      type: DocumentJobType.PDF_METADATA,
+    });
+    prismaService.document.findFirst.mockResolvedValue({
+      ...createDocument(),
+      jobs: [job],
+    });
+
+    await expect(service.getStatus('user-1', 'document-1')).resolves.toEqual({
+      documentId: 'document-1',
+      status: DocumentStatus.READY,
+      ocrStatus: DocumentOcrStatus.PENDING,
+      pageCount: 1,
+      hasTextLayer: false,
+      jobs: [job],
+    });
+    expect(prismaService.document.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'document-1',
+        ownerId: 'user-1',
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        status: true,
+        ocrStatus: true,
+        pageCount: true,
+        hasTextLayer: true,
+        jobs: {
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            attempts: true,
+            maxAttempts: true,
+            progressPercent: true,
+            currentPageNumber: true,
+            completedPages: true,
+            totalPages: true,
+            errorCode: true,
+            errorMessage: true,
+            queuedAt: true,
+            startedAt: true,
+            completedAt: true,
+          },
+          orderBy: { queuedAt: 'desc' },
+        },
+      },
+    });
+  });
+
+  it('lists document statuses in one query', async () => {
+    const firstJob = createDocumentStatusJob({ id: 'job-1' });
+    const secondJob = createDocumentStatusJob({
+      id: 'job-2',
+      type: DocumentJobType.PDF_OCR,
+      status: DocumentJobStatus.ACTIVE,
+    });
+    prismaService.document.findMany.mockResolvedValue([
+      { ...createDocument({ id: 'document-1' }), jobs: [firstJob] },
+      { ...createDocument({ id: 'document-2' }), jobs: [secondJob] },
+    ]);
+
+    await expect(service.listStatuses('user-1')).resolves.toEqual([
+      {
+        documentId: 'document-1',
+        status: DocumentStatus.READY,
+        ocrStatus: DocumentOcrStatus.PENDING,
+        pageCount: 1,
+        hasTextLayer: false,
+        jobs: [firstJob],
+      },
+      {
+        documentId: 'document-2',
+        status: DocumentStatus.READY,
+        ocrStatus: DocumentOcrStatus.PENDING,
+        pageCount: 1,
+        hasTextLayer: false,
+        jobs: [secondJob],
+      },
+    ]);
+    expect(prismaService.document.findMany).toHaveBeenCalledWith({
+      where: {
+        ownerId: 'user-1',
+        deletedAt: null,
+      },
+      select: {
+        id: true,
+        status: true,
+        ocrStatus: true,
+        pageCount: true,
+        hasTextLayer: true,
+        jobs: {
+          select: {
+            id: true,
+            type: true,
+            status: true,
+            attempts: true,
+            maxAttempts: true,
+            progressPercent: true,
+            currentPageNumber: true,
+            completedPages: true,
+            totalPages: true,
+            errorCode: true,
+            errorMessage: true,
+            queuedAt: true,
+            startedAt: true,
+            completedAt: true,
+          },
+          orderBy: { queuedAt: 'desc' },
+        },
       },
       orderBy: { createdAt: 'desc' },
     });
@@ -725,6 +853,7 @@ describe('DocumentsService', () => {
       {
         id: 'bookmark-1',
         documentId: 'document-1',
+        userId: 'user-1',
         pageNumber: 3,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -737,7 +866,7 @@ describe('DocumentsService', () => {
       service.listBookmarks('user-1', 'document-1'),
     ).resolves.toEqual(bookmarks);
     expect(prismaService.documentBookmark.findMany).toHaveBeenCalledWith({
-      where: { documentId: 'document-1' },
+      where: { documentId: 'document-1', userId: 'user-1' },
       orderBy: { pageNumber: 'asc' },
     });
   });
@@ -746,6 +875,7 @@ describe('DocumentsService', () => {
     const bookmark = {
       id: 'bookmark-1',
       documentId: 'document-1',
+      userId: 'user-1',
       pageNumber: 1,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -758,13 +888,15 @@ describe('DocumentsService', () => {
     ).resolves.toEqual(bookmark);
     expect(prismaService.documentBookmark.upsert).toHaveBeenCalledWith({
       where: {
-        documentId_pageNumber: {
+        documentId_userId_pageNumber: {
           documentId: 'document-1',
+          userId: 'user-1',
           pageNumber: 1,
         },
       },
       create: {
         documentId: 'document-1',
+        userId: 'user-1',
         pageNumber: 1,
       },
       update: {},
@@ -779,6 +911,7 @@ describe('DocumentsService', () => {
     expect(prismaService.documentBookmark.deleteMany).toHaveBeenCalledWith({
       where: {
         documentId: 'document-1',
+        userId: 'user-1',
         pageNumber: 1,
       },
     });
@@ -789,6 +922,7 @@ describe('DocumentsService', () => {
       {
         id: 'note-1',
         documentId: 'document-1',
+        userId: 'user-1',
         pageNumber: 2,
         content: 'Important clause',
         createdAt: new Date(),
@@ -802,7 +936,7 @@ describe('DocumentsService', () => {
       notes,
     );
     expect(prismaService.documentNote.findMany).toHaveBeenCalledWith({
-      where: { documentId: 'document-1' },
+      where: { documentId: 'document-1', userId: 'user-1' },
       orderBy: { pageNumber: 'asc' },
     });
   });
@@ -811,6 +945,7 @@ describe('DocumentsService', () => {
     const note = {
       id: 'note-1',
       documentId: 'document-1',
+      userId: 'user-1',
       pageNumber: 1,
       content: 'Important clause',
       createdAt: new Date(),
@@ -824,13 +959,15 @@ describe('DocumentsService', () => {
     ).resolves.toEqual(note);
     expect(prismaService.documentNote.upsert).toHaveBeenCalledWith({
       where: {
-        documentId_pageNumber: {
+        documentId_userId_pageNumber: {
           documentId: 'document-1',
+          userId: 'user-1',
           pageNumber: 1,
         },
       },
       create: {
         documentId: 'document-1',
+        userId: 'user-1',
         pageNumber: 1,
         content: 'Important clause',
       },
@@ -877,6 +1014,7 @@ describe('DocumentsService', () => {
     expect(prismaService.documentNote.deleteMany).toHaveBeenCalledWith({
       where: {
         documentId: 'document-1',
+        userId: 'user-1',
         pageNumber: 1,
       },
     });
@@ -889,9 +1027,19 @@ describe('DocumentsService', () => {
 
     await service.updateReadingPosition('user-1', 'document-1', 7);
 
-    expect(prismaService.document.update).toHaveBeenCalledWith({
-      where: { id: 'document-1' },
-      data: { lastReadPageNumber: 7 },
+    expect(prismaService.documentReadingPosition.upsert).toHaveBeenCalledWith({
+      where: {
+        documentId_userId: {
+          documentId: 'document-1',
+          userId: 'user-1',
+        },
+      },
+      create: {
+        documentId: 'document-1',
+        userId: 'user-1',
+        lastReadPageNumber: 7,
+      },
+      update: { lastReadPageNumber: 7 },
     });
   });
 
@@ -1262,6 +1410,26 @@ function createDocument(overrides: Record<string, unknown> = {}) {
     deletedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+function createDocumentStatusJob(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'job-1',
+    type: DocumentJobType.PDF_METADATA,
+    status: DocumentJobStatus.QUEUED,
+    attempts: 0,
+    maxAttempts: 3,
+    progressPercent: 0,
+    currentPageNumber: null,
+    completedPages: 0,
+    totalPages: null,
+    errorCode: null,
+    errorMessage: null,
+    queuedAt: new Date(),
+    startedAt: null,
+    completedAt: null,
     ...overrides,
   };
 }

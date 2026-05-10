@@ -52,6 +52,39 @@ type RestartedDocumentJob =
       payload: PdfOcrJobPayload;
     };
 
+const documentStatusJobSelect = {
+  id: true,
+  type: true,
+  status: true,
+  attempts: true,
+  maxAttempts: true,
+  progressPercent: true,
+  currentPageNumber: true,
+  completedPages: true,
+  totalPages: true,
+  errorCode: true,
+  errorMessage: true,
+  queuedAt: true,
+  startedAt: true,
+  completedAt: true,
+} satisfies Prisma.DocumentJobSelect;
+
+const documentStatusSelect = {
+  id: true,
+  status: true,
+  ocrStatus: true,
+  pageCount: true,
+  hasTextLayer: true,
+  jobs: {
+    select: documentStatusJobSelect,
+    orderBy: { queuedAt: 'desc' },
+  },
+} satisfies Prisma.DocumentSelect;
+
+type DocumentStatusResult = Prisma.DocumentGetPayload<{
+  select: typeof documentStatusSelect;
+}>;
+
 @Injectable()
 export class DocumentsService {
   private readonly uploadUrlExpiresInSeconds = 900;
@@ -136,10 +169,12 @@ export class DocumentsService {
       where.folderId = folderId;
     }
 
-    return this.prismaService.document.findMany({
+    const documents = await this.prismaService.document.findMany({
       where,
       orderBy: { createdAt: 'desc' },
     });
+
+    return this.applyReadingPositions(userId, documents);
   }
 
   async getDocument(
@@ -164,7 +199,7 @@ export class DocumentsService {
       throw new NotFoundException('Document was not found.');
     }
 
-    return document;
+    return this.applyReadingPosition(userId, document);
   }
 
   async updateDocument(
@@ -200,7 +235,7 @@ export class DocumentsService {
       throw new BadRequestException('No document updates were provided.');
     }
 
-    return this.prismaService.document.update({
+    const document = await this.prismaService.document.update({
       where: { id: documentId },
       data,
       include: {
@@ -209,6 +244,8 @@ export class DocumentsService {
         },
       },
     });
+
+    return this.applyReadingPosition(userId, document);
   }
 
   async completeUpload(
@@ -350,7 +387,10 @@ export class DocumentsService {
       throw new NotFoundException('Document was not found.');
     }
 
-    return document;
+    return {
+      ...document,
+      lastReadPageNumber: null,
+    };
   }
 
   async createPublicViewUrl(documentId: string): Promise<DocumentViewResponse> {
@@ -559,17 +599,35 @@ export class DocumentsService {
         role,
         documentId,
       ),
-      include: {
-        jobs: {
-          orderBy: { queuedAt: 'desc' },
-        },
-      },
+      select: documentStatusSelect,
     });
 
     if (!document) {
       throw new NotFoundException('Document was not found.');
     }
 
+    return this.toDocumentStatusResponse(document);
+  }
+
+  async listStatuses(
+    userId: string,
+    role: UserRole = UserRole.USER,
+  ): Promise<DocumentStatusResponse[]> {
+    const documents = await this.prismaService.document.findMany({
+      where: await this.accessControlService.createReadableDocumentWhere(
+        userId,
+        role,
+      ),
+      select: documentStatusSelect,
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return documents.map((document) => this.toDocumentStatusResponse(document));
+  }
+
+  private toDocumentStatusResponse(
+    document: DocumentStatusResult,
+  ): DocumentStatusResponse {
     return {
       documentId: document.id,
       status: document.status,
@@ -832,11 +890,12 @@ export class DocumentsService {
   async listBookmarks(
     userId: string,
     documentId: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentBookmark[]> {
-    await this.findOwnedDocumentOrThrow(userId, documentId);
+    await this.findReadableDocumentOrThrow(userId, role, documentId);
 
     return this.prismaService.documentBookmark.findMany({
-      where: { documentId },
+      where: { documentId, userId },
       orderBy: { pageNumber: 'asc' },
     });
   }
@@ -845,20 +904,27 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     pageNumber: number,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentBookmark> {
-    const document = await this.findOwnedDocumentOrThrow(userId, documentId);
+    const document = await this.findReadableDocumentOrThrow(
+      userId,
+      role,
+      documentId,
+    );
 
     this.assertValidPageNumber(document, pageNumber, 'Bookmark page number');
 
     return this.prismaService.documentBookmark.upsert({
       where: {
-        documentId_pageNumber: {
+        documentId_userId_pageNumber: {
           documentId,
+          userId,
           pageNumber,
         },
       },
       create: {
         documentId,
+        userId,
         pageNumber,
       },
       update: {},
@@ -869,24 +935,34 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     pageNumber: number,
+    role: UserRole = UserRole.USER,
   ): Promise<void> {
-    const document = await this.findOwnedDocumentOrThrow(userId, documentId);
+    const document = await this.findReadableDocumentOrThrow(
+      userId,
+      role,
+      documentId,
+    );
 
     this.assertValidPageNumber(document, pageNumber, 'Bookmark page number');
 
     await this.prismaService.documentBookmark.deleteMany({
       where: {
         documentId,
+        userId,
         pageNumber,
       },
     });
   }
 
-  async listNotes(userId: string, documentId: string): Promise<DocumentNote[]> {
-    await this.findOwnedDocumentOrThrow(userId, documentId);
+  async listNotes(
+    userId: string,
+    documentId: string,
+    role: UserRole = UserRole.USER,
+  ): Promise<DocumentNote[]> {
+    await this.findReadableDocumentOrThrow(userId, role, documentId);
 
     return this.prismaService.documentNote.findMany({
-      where: { documentId },
+      where: { documentId, userId },
       orderBy: { pageNumber: 'asc' },
     });
   }
@@ -896,8 +972,13 @@ export class DocumentsService {
     documentId: string,
     pageNumber: number,
     content: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentNote> {
-    const document = await this.findOwnedDocumentOrThrow(userId, documentId);
+    const document = await this.findReadableDocumentOrThrow(
+      userId,
+      role,
+      documentId,
+    );
 
     this.assertValidPageNumber(document, pageNumber, 'Note page number');
 
@@ -909,13 +990,15 @@ export class DocumentsService {
 
     return this.prismaService.documentNote.upsert({
       where: {
-        documentId_pageNumber: {
+        documentId_userId_pageNumber: {
           documentId,
+          userId,
           pageNumber,
         },
       },
       create: {
         documentId,
+        userId,
         pageNumber,
         content: trimmedContent,
       },
@@ -929,14 +1012,20 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     pageNumber: number,
+    role: UserRole = UserRole.USER,
   ): Promise<void> {
-    const document = await this.findOwnedDocumentOrThrow(userId, documentId);
+    const document = await this.findReadableDocumentOrThrow(
+      userId,
+      role,
+      documentId,
+    );
 
     this.assertValidPageNumber(document, pageNumber, 'Note page number');
 
     await this.prismaService.documentNote.deleteMany({
       where: {
         documentId,
+        userId,
         pageNumber,
       },
     });
@@ -946,14 +1035,29 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     pageNumber: number,
+    role: UserRole = UserRole.USER,
   ): Promise<void> {
-    const document = await this.findOwnedDocumentOrThrow(userId, documentId);
+    const document = await this.findReadableDocumentOrThrow(
+      userId,
+      role,
+      documentId,
+    );
 
     this.assertValidPageNumber(document, pageNumber, 'Last read page number');
 
-    await this.prismaService.document.update({
-      where: { id: documentId },
-      data: { lastReadPageNumber: pageNumber },
+    await this.prismaService.documentReadingPosition.upsert({
+      where: {
+        documentId_userId: {
+          documentId,
+          userId,
+        },
+      },
+      create: {
+        documentId,
+        userId,
+        lastReadPageNumber: pageNumber,
+      },
+      update: { lastReadPageNumber: pageNumber },
     });
   }
 
@@ -1220,6 +1324,57 @@ export class DocumentsService {
     if (permission !== ResourcePermission.READ) {
       throw new BadRequestException('Only READ permission is supported.');
     }
+  }
+
+  private async applyReadingPosition<
+    T extends { id: string; lastReadPageNumber: number | null },
+  >(userId: string, document: T): Promise<T> {
+    const readingPosition =
+      await this.prismaService.documentReadingPosition.findUnique({
+        where: {
+          documentId_userId: {
+            documentId: document.id,
+            userId,
+          },
+        },
+      });
+
+    return {
+      ...document,
+      lastReadPageNumber:
+        readingPosition?.lastReadPageNumber ?? document.lastReadPageNumber,
+    };
+  }
+
+  private async applyReadingPositions<
+    T extends { id: string; lastReadPageNumber: number | null },
+  >(userId: string, documents: T[]): Promise<T[]> {
+    if (documents.length === 0) {
+      return documents;
+    }
+
+    const readingPositions =
+      await this.prismaService.documentReadingPosition.findMany({
+        where: {
+          userId,
+          documentId: {
+            in: documents.map((document) => document.id),
+          },
+        },
+      });
+    const readingPositionByDocumentId = new Map(
+      readingPositions.map((readingPosition) => [
+        readingPosition.documentId,
+        readingPosition.lastReadPageNumber,
+      ]),
+    );
+
+    return documents.map((document) => ({
+      ...document,
+      lastReadPageNumber:
+        readingPositionByDocumentId.get(document.id) ??
+        document.lastReadPageNumber,
+    }));
   }
 
   private async findPublicDocumentOrThrow(documentId: string) {

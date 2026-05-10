@@ -88,6 +88,9 @@ model User {
   groupMemberships UserGroupMembership[]
   folderPermissions FolderPermission[]
   documentPermissions DocumentPermission[]
+  documentBookmarks DocumentBookmark[]
+  documentNotes DocumentNote[]
+  documentReadingPositions DocumentReadingPosition[]
 
   @@unique([oidcIssuer, oidcSubject])
   @@index([email])
@@ -225,6 +228,7 @@ model Document {
   jobs      DocumentJob[]
   bookmarks DocumentBookmark[]
   notes     DocumentNote[]
+  readingPositions DocumentReadingPosition[]
   permissions DocumentPermission[]
 
   @@index([ownerId, createdAt])
@@ -259,30 +263,52 @@ model DocumentPermission {
 model DocumentBookmark {
   id         String   @id @default(uuid())
   documentId String
+  userId     String
   pageNumber Int
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([documentId, pageNumber])
+  @@unique([documentId, userId, pageNumber])
   @@index([documentId])
+  @@index([userId])
   @@map("document_bookmarks")
 }
 
 model DocumentNote {
   id         String   @id @default(uuid())
   documentId String
+  userId     String
   pageNumber Int
   content    String   @db.Text
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
   document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([documentId, pageNumber])
+  @@unique([documentId, userId, pageNumber])
   @@index([documentId])
+  @@index([userId])
   @@map("document_notes")
+}
+
+model DocumentReadingPosition {
+  id                 String   @id @default(uuid())
+  documentId         String
+  userId             String
+  lastReadPageNumber Int
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+  @@index([userId])
+  @@map("document_reading_positions")
 }
 
 model DocumentPage {
