@@ -237,6 +237,43 @@ export class DocumentsService {
     };
   }
 
+  async getPublicDocument(documentId: string): Promise<DocumentDetail> {
+    const document = await this.prismaService.document.findFirst({
+      where: this.createPublicDocumentWhere(documentId),
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+        },
+      },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document was not found.');
+    }
+
+    return document;
+  }
+
+  async createPublicViewUrl(documentId: string): Promise<DocumentViewResponse> {
+    const document = await this.findPublicDocumentOrThrow(documentId);
+    const viewTarget = this.createViewTarget(document);
+
+    const viewUrl = await this.s3Service.createGetObjectSignedUrl({
+      key: viewTarget.objectKey,
+      expiresInSeconds: this.viewUrlExpiresInSeconds,
+      responseContentDisposition: 'inline',
+      responseContentType: 'application/pdf',
+    });
+
+    return {
+      documentId: document.id,
+      viewUrl,
+      expiresIn: this.viewUrlExpiresInSeconds,
+      isLinearized: viewTarget.isLinearized,
+      linearizationStatus: viewTarget.linearizationStatus,
+    };
+  }
+
   async createPreviewUrl(
     userId: string,
     documentId: string,
@@ -265,6 +302,34 @@ export class DocumentsService {
       throw new BadRequestException('Document is not available for preview.');
     }
 
+    const preview = document.pages[0]?.derivatives[0];
+
+    if (!preview) {
+      throw new NotFoundException('Document preview was not found.');
+    }
+
+    const previewUrl = await this.s3Service.createGetObjectSignedUrl({
+      key: preview.objectKey,
+      expiresInSeconds: this.viewUrlExpiresInSeconds,
+      responseContentDisposition: 'inline',
+      responseContentType: preview.contentType,
+    });
+
+    return {
+      documentId: document.id,
+      previewUrl,
+      contentType: preview.contentType,
+      width: preview.width,
+      height: preview.height,
+      expiresIn: this.viewUrlExpiresInSeconds,
+    };
+  }
+
+  async createPublicPreviewUrl(
+    documentId: string,
+  ): Promise<DocumentPreviewResponse> {
+    const document =
+      await this.findPublicDocumentWithPreviewOrThrow(documentId);
     const preview = document.pages[0]?.derivatives[0];
 
     if (!preview) {
@@ -547,6 +612,24 @@ export class DocumentsService {
     });
   }
 
+  async updatePublicAccess(
+    userId: string,
+    documentId: string,
+    isPublic: boolean,
+  ): Promise<DocumentDetail> {
+    await this.findOwnedDocumentOrThrow(userId, documentId);
+
+    return this.prismaService.document.update({
+      where: { id: documentId },
+      data: { isPublic },
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+        },
+      },
+    });
+  }
+
   async deleteDocument(userId: string, documentId: string): Promise<void> {
     await this.findOwnedDocumentOrThrow(userId, documentId);
 
@@ -571,6 +654,42 @@ export class DocumentsService {
     return document;
   }
 
+  private async findPublicDocumentOrThrow(documentId: string) {
+    const document = await this.prismaService.document.findFirst({
+      where: this.createPublicDocumentWhere(documentId),
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document was not found.');
+    }
+
+    return document;
+  }
+
+  private async findPublicDocumentWithPreviewOrThrow(documentId: string) {
+    const document = await this.prismaService.document.findFirst({
+      where: this.createPublicDocumentWhere(documentId),
+      include: {
+        pages: {
+          where: { pageNumber: 1 },
+          include: {
+            derivatives: {
+              where: { kind: DocumentPageDerivativeKind.PREVIEW },
+              take: 1,
+            },
+          },
+          take: 1,
+        },
+      },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document was not found.');
+    }
+
+    return document;
+  }
+
   private createOwnedDocumentWhere(
     userId: string,
     documentId: string,
@@ -578,6 +697,18 @@ export class DocumentsService {
     return {
       id: documentId,
       ownerId: userId,
+      deletedAt: null,
+    };
+  }
+
+  private createPublicDocumentWhere(
+    documentId: string,
+  ): Prisma.DocumentWhereInput {
+    return {
+      id: documentId,
+      isPublic: true,
+      status: DocumentStatus.READY,
+      uploadedAt: { not: null },
       deletedAt: null,
     };
   }

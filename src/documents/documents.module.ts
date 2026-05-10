@@ -3,7 +3,10 @@ import { BullModule } from '@nestjs/bullmq';
 import { AuthModule } from '../auth/auth.module';
 import { S3Module } from '../s3/s3.module';
 import { WorkerSettingsModule } from '../worker-settings/worker-settings.module';
-import { DocumentsController } from './documents.controller';
+import {
+  DocumentsController,
+  PublicDocumentsController,
+} from './documents.controller';
 import { DocumentsService } from './documents.service';
 import { PdfMetadataResultProcessor } from './pdf-metadata-result.processor';
 import { PdfOcrResultProcessor } from './pdf-ocr-result.processor';
@@ -26,7 +29,7 @@ import { PdfOcrResultProcessor } from './pdf-ocr-result.processor';
       name: 'pdf-ocr-result',
     }),
   ],
-  controllers: [DocumentsController],
+  controllers: [DocumentsController, PublicDocumentsController],
   providers: [
     DocumentsService,
     PdfMetadataResultProcessor,

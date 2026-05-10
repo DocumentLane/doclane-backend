@@ -220,6 +220,89 @@ describe('DocumentsService', () => {
     });
   });
 
+  it('updates public access for an owned document', async () => {
+    prismaService.document.findFirst.mockResolvedValue(createDocument());
+    prismaService.document.update.mockResolvedValue(
+      createDocument({ isPublic: true }),
+    );
+
+    await expect(
+      service.updatePublicAccess('user-1', 'document-1', true),
+    ).resolves.toMatchObject({ isPublic: true });
+    expect(prismaService.document.update).toHaveBeenCalledWith({
+      where: { id: 'document-1' },
+      data: { isPublic: true },
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+        },
+      },
+    });
+  });
+
+  it('rejects public access updates for documents not owned by the user', async () => {
+    prismaService.document.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.updatePublicAccess('user-2', 'document-1', true),
+    ).rejects.toThrow('Document was not found.');
+    expect(prismaService.document.update).not.toHaveBeenCalled();
+  });
+
+  it('creates a signed public view URL for a public ready document', async () => {
+    prismaService.document.findFirst.mockResolvedValue(
+      createDocument({ isPublic: true }),
+    );
+
+    await expect(service.createPublicViewUrl('document-1')).resolves.toEqual({
+      documentId: 'document-1',
+      viewUrl: 'signed-url',
+      expiresIn: 300,
+      isLinearized: false,
+      linearizationStatus: DocumentLinearizationStatus.PENDING,
+    });
+    expect(prismaService.document.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'document-1',
+        isPublic: true,
+        status: DocumentStatus.READY,
+        uploadedAt: { not: null },
+        deletedAt: null,
+      },
+    });
+  });
+
+  it('rejects public view URLs when the document is not public', async () => {
+    prismaService.document.findFirst.mockResolvedValue(null);
+
+    await expect(service.createPublicViewUrl('document-1')).rejects.toThrow(
+      'Document was not found.',
+    );
+    expect(s3Service.createGetObjectSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('rejects deleted or not ready documents through the public lookup', async () => {
+    prismaService.document.findFirst.mockResolvedValue(null);
+
+    await expect(service.getPublicDocument('document-1')).rejects.toThrow(
+      'Document was not found.',
+    );
+    expect(prismaService.document.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'document-1',
+        isPublic: true,
+        status: DocumentStatus.READY,
+        uploadedAt: { not: null },
+        deletedAt: null,
+      },
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+        },
+      },
+    });
+  });
+
   it('lists owned document bookmarks by page number', async () => {
     const bookmarks = [
       {
@@ -580,6 +663,7 @@ function createDocument(overrides: Record<string, unknown> = {}) {
     ocrCompletedAt: null,
     status: DocumentStatus.READY,
     ocrStatus: DocumentOcrStatus.PENDING,
+    isPublic: false,
     pageCount: 1,
     lastReadPageNumber: null,
     hasTextLayer: false,

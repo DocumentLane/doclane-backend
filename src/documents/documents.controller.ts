@@ -6,6 +6,7 @@ import {
   Param,
   ParseIntPipe,
   ParseUUIDPipe,
+  Patch,
   Post,
   Put,
   Req,
@@ -25,6 +26,7 @@ import { DocumentStatusResponseDto } from './dto/document-status-response.dto';
 import { DocumentUploadSessionResponseDto } from './dto/document-upload-session-response.dto';
 import { DocumentViewResponseDto } from './dto/document-view-response.dto';
 import { SaveDocumentNoteDto } from './dto/save-document-note.dto';
+import { UpdateDocumentPublicAccessDto } from './dto/update-document-public-access.dto';
 import { UpdateDocumentReadingPositionDto } from './dto/update-document-reading-position.dto';
 import { DocumentsService } from './documents.service';
 import { DocumentBookmarkResponse } from './interfaces/document-bookmark-response.interface';
@@ -119,6 +121,20 @@ export class DocumentsController {
     );
   }
 
+  @Patch(':id/public-access')
+  @SerializeOptions({ type: DocumentResponseDto })
+  updatePublicAccess(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Body() dto: UpdateDocumentPublicAccessDto,
+  ): Promise<DocumentDetail> {
+    return this.documentsService.updatePublicAccess(
+      request.user.sub,
+      documentId,
+      dto.isPublic,
+    );
+  }
+
   @Post(':id/ocr/reprocess')
   @SerializeOptions({ type: DocumentStatusResponseDto })
   reprocessOcr(
@@ -208,5 +224,35 @@ export class DocumentsController {
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<void> {
     return this.documentsService.deleteDocument(request.user.sub, documentId);
+  }
+}
+
+@Controller('public/documents')
+@SerializeOptions({ strategy: 'excludeAll' })
+export class PublicDocumentsController {
+  constructor(private readonly documentsService: DocumentsService) {}
+
+  @Get(':id')
+  @SerializeOptions({ type: DocumentResponseDto })
+  getPublicDocument(
+    @Param('id', ParseUUIDPipe) documentId: string,
+  ): Promise<DocumentDetail> {
+    return this.documentsService.getPublicDocument(documentId);
+  }
+
+  @Get(':id/view')
+  @SerializeOptions({ type: DocumentViewResponseDto })
+  createPublicViewUrl(
+    @Param('id', ParseUUIDPipe) documentId: string,
+  ): Promise<DocumentViewResponse> {
+    return this.documentsService.createPublicViewUrl(documentId);
+  }
+
+  @Get(':id/preview')
+  @SerializeOptions({ type: DocumentPreviewResponseDto })
+  createPublicPreviewUrl(
+    @Param('id', ParseUUIDPipe) documentId: string,
+  ): Promise<DocumentPreviewResponse> {
+    return this.documentsService.createPublicPreviewUrl(documentId);
   }
 }

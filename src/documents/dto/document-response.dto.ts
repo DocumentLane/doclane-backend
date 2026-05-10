@@ -50,6 +50,9 @@ export class DocumentResponseDto {
   ocrStatus!: DocumentOcrStatus;
 
   @Expose()
+  isPublic!: boolean;
+
+  @Expose()
   pageCount!: number | null;
 
   @Expose()
