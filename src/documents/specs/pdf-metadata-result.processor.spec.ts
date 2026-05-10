@@ -135,6 +135,32 @@ describe('PdfMetadataResultProcessor', () => {
         sizeBytes: BigInt(12345),
       },
     });
+    const jobUpdateCalls = prismaService.documentJob.update.mock.calls as Array<
+      [
+        {
+          where: { id: string };
+          data: {
+            status?: DocumentJobStatus;
+            progressPercent?: number;
+            result?: unknown;
+            completedAt?: Date;
+          };
+        },
+      ]
+    >;
+    const metadataJobUpdate = jobUpdateCalls.find(
+      ([call]) => call.where.id === 'metadata-job-1',
+    );
+
+    expect(metadataJobUpdate?.[0].data).toMatchObject({
+      status: DocumentJobStatus.COMPLETED,
+      progressPercent: 100,
+      result: {
+        jobId: 'metadata-job-1',
+        status: 'completed',
+      },
+      completedAt: expect.any(Date) as Date,
+    });
     expect(pdfOcrQueue.add).toHaveBeenCalledWith(
       'recognize-pages',
       expect.objectContaining({

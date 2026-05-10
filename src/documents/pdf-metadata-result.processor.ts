@@ -79,6 +79,7 @@ export class PdfMetadataResultProcessor extends WorkerHost {
         where: { id: result.jobId },
         data: {
           status: DocumentJobStatus.COMPLETED,
+          progressPercent: 100,
           result: this.toJsonObject(result),
           completedAt: new Date(),
         },
