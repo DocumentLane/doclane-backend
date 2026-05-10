@@ -244,6 +244,28 @@ describe('DocumentsService', () => {
     });
   });
 
+  it('creates an upload session in the root folder when folderId is null', async () => {
+    await expect(
+      service.createUploadSession('user-1', {
+        originalFileName: 'document.pdf',
+        folderId: null,
+      }),
+    ).resolves.toMatchObject({
+      uploadUrl: 'upload-url',
+      method: 'PUT',
+      storageBucket: 'documents',
+      contentType: 'application/pdf',
+    });
+    expect(prismaService.folder.findFirst).not.toHaveBeenCalled();
+    expect(prismaService.document.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ownerId: 'user-1',
+        folderId: null,
+        title: 'document.pdf',
+      }) as object,
+    });
+  });
+
   it('rejects upload sessions for folders not owned by the user', async () => {
     prismaService.folder.findFirst.mockResolvedValue(null);
 

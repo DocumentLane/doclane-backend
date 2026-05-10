@@ -7,6 +7,7 @@ import {
   IsUUID,
   MaxLength,
   Min,
+  ValidateIf,
 } from 'class-validator';
 
 export class CreateDocumentUploadSessionDto {
@@ -31,7 +32,7 @@ export class CreateDocumentUploadSessionDto {
   @MaxLength(128)
   checksumSha256?: string;
 
-  @IsOptional()
+  @ValidateIf((_, value: unknown) => value !== null && value !== undefined)
   @IsUUID()
-  folderId?: string;
+  folderId?: string | null;
 }

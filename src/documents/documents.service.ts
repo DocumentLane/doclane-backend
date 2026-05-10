@@ -105,7 +105,7 @@ export class DocumentsService {
     userId: string,
     dto: CreateDocumentUploadSessionDto,
   ): Promise<DocumentUploadSessionResponse> {
-    if (dto.folderId !== undefined) {
+    if (dto.folderId != null) {
       await this.findOwnedFolderOrThrow(userId, dto.folderId);
     }
 
@@ -120,7 +120,7 @@ export class DocumentsService {
       data: {
         id: documentId,
         ownerId: userId,
-        folderId: dto.folderId,
+        folderId: dto.folderId ?? null,
         title: dto.title ?? dto.originalFileName,
         originalFileName: dto.originalFileName,
         contentType: 'application/pdf',
