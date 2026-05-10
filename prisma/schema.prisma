@@ -67,6 +67,10 @@ enum DocumentPageDerivativeKind {
   PREVIEW
 }
 
+enum ResourcePermission {
+  READ
+}
+
 model User {
   id           String   @id @default(uuid())
   oidcIssuer   String
@@ -74,12 +78,16 @@ model User {
   email        String?
   displayName  String?
   role         UserRole @default(USER)
+  groupsInitializedAt DateTime?
   authorizedAt DateTime @default(now())
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   documents Document[]
   folders   Folder[]
+  groupMemberships UserGroupMembership[]
+  folderPermissions FolderPermission[]
+  documentPermissions DocumentPermission[]
 
   @@unique([oidcIssuer, oidcSubject])
   @@index([email])
@@ -108,19 +116,74 @@ model WorkerSettings {
   @@map("worker_settings")
 }
 
+model OidcGroup {
+  id          String   @id @default(uuid())
+  issuer      String
+  externalId  String
+  displayName String?
+  description String?  @db.Text
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  memberships UserGroupMembership[]
+  folderPermissions FolderPermission[]
+  documentPermissions DocumentPermission[]
+
+  @@unique([issuer, externalId])
+  @@index([externalId])
+  @@map("oidc_groups")
+}
+
+model UserGroupMembership {
+  id        String   @id @default(uuid())
+  userId    String
+  groupId   String
+  createdAt DateTime @default(now())
+
+  user  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group OidcGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, groupId])
+  @@index([groupId])
+  @@map("user_group_memberships")
+}
+
 model Folder {
   id        String   @id @default(uuid())
   ownerId   String
   name      String
+  isPublic  Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner     User       @relation(fields: [ownerId], references: [id], onDelete: Restrict)
-  documents Document[]
+  owner       User               @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  documents   Document[]
+  permissions FolderPermission[]
 
   @@unique([ownerId, name])
   @@index([ownerId, createdAt])
+  @@index([isPublic])
   @@map("folders")
+}
+
+model FolderPermission {
+  id         String             @id @default(uuid())
+  folderId   String
+  userId     String?
+  groupId    String?
+  permission ResourcePermission @default(READ)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  folder Folder     @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  user   User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group  OidcGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([folderId, userId])
+  @@unique([folderId, groupId])
+  @@index([userId])
+  @@index([groupId])
+  @@map("folder_permissions")
 }
 
 model Document {
@@ -162,6 +225,7 @@ model Document {
   jobs      DocumentJob[]
   bookmarks DocumentBookmark[]
   notes     DocumentNote[]
+  permissions DocumentPermission[]
 
   @@index([ownerId, createdAt])
   @@index([ownerId, folderId, createdAt])
@@ -170,6 +234,26 @@ model Document {
   @@index([linearizationStatus])
   @@index([isPublic, status])
   @@map("documents")
+}
+
+model DocumentPermission {
+  id         String             @id @default(uuid())
+  documentId String
+  userId     String?
+  groupId    String?
+  permission ResourcePermission @default(READ)
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
+
+  document Document   @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user     User?      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  group    OidcGroup? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+  @@unique([documentId, groupId])
+  @@index([userId])
+  @@index([groupId])
+  @@map("document_permissions")
 }
 
 model DocumentBookmark {

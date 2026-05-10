@@ -1,15 +1,21 @@
 import { Exclude, Expose, Type } from 'class-transformer';
 
 @Exclude()
-export class FolderResponseDto {
+export class GroupResponseDto {
   @Expose()
   id!: string;
 
   @Expose()
-  name!: string;
+  issuer!: string;
 
   @Expose()
-  isPublic!: boolean;
+  externalId!: string;
+
+  @Expose()
+  displayName!: string | null;
+
+  @Expose()
+  description!: string | null;
 
   @Expose()
   @Type(() => Date)

@@ -104,6 +104,7 @@ export class AuthService {
       subject: profileClaims.sub,
       email: profileClaims.email,
       displayName: profileClaims.name ?? profileClaims.preferred_username,
+      groupExternalIds: this.extractGroupExternalIds(profileClaims),
     });
 
     await this.prismaService.oidcAuthorizationState.delete({
@@ -181,7 +182,7 @@ export class AuthService {
         });
 
         if (existingUser) {
-          return tx.user.update({
+          const updatedUser = await tx.user.update({
             where: { id: existingUser.id },
             data: {
               email: profile.email,
@@ -189,11 +190,17 @@ export class AuthService {
               authorizedAt: new Date(),
             },
           });
+
+          if (!updatedUser.groupsInitializedAt) {
+            return this.initializeUserGroups(tx, updatedUser, profile);
+          }
+
+          return updatedUser;
         }
 
         const userCount = await tx.user.count();
 
-        return tx.user.create({
+        const createdUser = await tx.user.create({
           data: {
             oidcIssuer: profile.issuer,
             oidcSubject: profile.subject,
@@ -202,8 +209,71 @@ export class AuthService {
             role: userCount === 0 ? UserRole.ADMIN : UserRole.USER,
           },
         });
+
+        return this.initializeUserGroups(tx, createdUser, profile);
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  }
+
+  private async initializeUserGroups(
+    tx: Prisma.TransactionClient,
+    user: User,
+    profile: OidcProfile,
+  ): Promise<User> {
+    const groupIds: string[] = [];
+
+    for (const externalId of profile.groupExternalIds) {
+      const group = await tx.oidcGroup.upsert({
+        where: {
+          issuer_externalId: {
+            issuer: profile.issuer,
+            externalId,
+          },
+        },
+        create: {
+          issuer: profile.issuer,
+          externalId,
+          displayName: externalId,
+        },
+        update: {},
+      });
+      groupIds.push(group.id);
+    }
+
+    if (groupIds.length > 0) {
+      await tx.userGroupMembership.createMany({
+        data: groupIds.map((groupId) => ({
+          userId: user.id,
+          groupId,
+        })),
+        skipDuplicates: true,
+      });
+    }
+
+    return tx.user.update({
+      where: { id: user.id },
+      data: { groupsInitializedAt: new Date() },
+    });
+  }
+
+  private extractGroupExternalIds(claims: OidcProfileClaims): string[] {
+    const groupsClaim = this.configService.get<string>(
+      'auth.oidc.groupsClaim',
+      'groups',
+    );
+    const rawGroups = claims[groupsClaim];
+
+    if (!Array.isArray(rawGroups)) {
+      return [];
+    }
+
+    const groupExternalIds = rawGroups.filter(
+      (group): group is string => typeof group === 'string',
+    );
+
+    return [...new Set(groupExternalIds.map((group) => group.trim()))].filter(
+      (group) => group.length > 0,
     );
   }
 

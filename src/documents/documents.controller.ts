@@ -14,7 +14,7 @@ import {
   SerializeOptions,
   UseGuards,
 } from '@nestjs/common';
-import { Document } from '@prisma/client';
+import { Document, DocumentPermission } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../auth/interfaces/authenticated-request.interface';
 import { CreateDocumentThumbnailUploadSessionDto } from './dto/create-document-thumbnail-upload-session.dto';
@@ -24,6 +24,11 @@ import { DocumentBookmarkResponseDto } from './dto/document-bookmark-response.dt
 import { DocumentNoteResponseDto } from './dto/document-note-response.dto';
 import { DocumentPreviewResponseDto } from './dto/document-preview-response.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
+import {
+  DocumentPermissionsResponseDto,
+  ResourcePermissionResponseDto,
+} from './dto/resource-permission-response.dto';
+import { SaveResourcePermissionDto } from './dto/save-resource-permission.dto';
 import { DocumentStatusResponseDto } from './dto/document-status-response.dto';
 import { DocumentThumbnailUploadSessionResponseDto } from './dto/document-thumbnail-upload-session-response.dto';
 import { DocumentUploadSessionResponseDto } from './dto/document-upload-session-response.dto';
@@ -63,7 +68,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Query('folderId') folderId?: string,
   ): Promise<Document[]> {
-    return this.documentsService.listDocuments(request.user.sub, folderId);
+    return this.documentsService.listDocuments(
+      request.user.sub,
+      folderId,
+      request.user.role,
+    );
   }
 
   @Get(':id')
@@ -72,7 +81,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentDetail> {
-    return this.documentsService.getDocument(request.user.sub, documentId);
+    return this.documentsService.getDocument(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 
   @Patch(':id')
@@ -86,6 +99,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       dto,
+      request.user.role,
     );
   }
 
@@ -100,6 +114,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       dto,
+      request.user.role,
     );
   }
 
@@ -109,7 +124,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentViewResponse> {
-    return this.documentsService.createViewUrl(request.user.sub, documentId);
+    return this.documentsService.createViewUrl(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 
   @Get(':id/preview')
@@ -118,7 +137,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentPreviewResponse> {
-    return this.documentsService.createPreviewUrl(request.user.sub, documentId);
+    return this.documentsService.createPreviewUrl(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 
   @Post(':id/thumbnail/upload-session')
@@ -132,6 +155,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       dto,
+      request.user.role,
     );
   }
 
@@ -141,7 +165,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentStatusResponse> {
-    return this.documentsService.getStatus(request.user.sub, documentId);
+    return this.documentsService.getStatus(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 
   @Put(':id/reading-position')
@@ -168,6 +196,82 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       dto.isPublic,
+      request.user.role,
+    );
+  }
+
+  @Get(':id/permissions')
+  @SerializeOptions({ type: DocumentPermissionsResponseDto })
+  listPermissions(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+  ) {
+    return this.documentsService.listPermissions(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
+  }
+
+  @Put(':id/permissions/groups/:groupId')
+  @SerializeOptions({ type: ResourcePermissionResponseDto })
+  saveGroupPermission(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Param('groupId', ParseUUIDPipe) groupId: string,
+    @Body() dto: SaveResourcePermissionDto,
+  ): Promise<DocumentPermission> {
+    return this.documentsService.saveGroupPermission(
+      request.user.sub,
+      request.user.role,
+      documentId,
+      groupId,
+      dto.permission,
+    );
+  }
+
+  @Delete(':id/permissions/groups/:groupId')
+  removeGroupPermission(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Param('groupId', ParseUUIDPipe) groupId: string,
+  ): Promise<void> {
+    return this.documentsService.removeGroupPermission(
+      request.user.sub,
+      request.user.role,
+      documentId,
+      groupId,
+    );
+  }
+
+  @Put(':id/permissions/users/:userId')
+  @SerializeOptions({ type: ResourcePermissionResponseDto })
+  saveUserPermission(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Param('userId', ParseUUIDPipe) targetUserId: string,
+    @Body() dto: SaveResourcePermissionDto,
+  ): Promise<DocumentPermission> {
+    return this.documentsService.saveUserPermission(
+      request.user.sub,
+      request.user.role,
+      documentId,
+      targetUserId,
+      dto.permission,
+    );
+  }
+
+  @Delete(':id/permissions/users/:userId')
+  removeUserPermission(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Param('userId', ParseUUIDPipe) targetUserId: string,
+  ): Promise<void> {
+    return this.documentsService.removeUserPermission(
+      request.user.sub,
+      request.user.role,
+      documentId,
+      targetUserId,
     );
   }
 
@@ -177,7 +281,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentStatusResponse> {
-    return this.documentsService.reprocessOcr(request.user.sub, documentId);
+    return this.documentsService.reprocessOcr(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 
   @Post(':id/jobs/:jobId/restart')
@@ -191,6 +299,7 @@ export class DocumentsController {
       request.user.sub,
       documentId,
       jobId,
+      request.user.role,
     );
   }
 
@@ -273,7 +382,11 @@ export class DocumentsController {
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<void> {
-    return this.documentsService.deleteDocument(request.user.sub, documentId);
+    return this.documentsService.deleteDocument(
+      request.user.sub,
+      documentId,
+      request.user.role,
+    );
   }
 }
 

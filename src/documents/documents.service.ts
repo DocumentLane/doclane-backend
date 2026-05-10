@@ -16,8 +16,11 @@ import {
   DocumentPageDerivativeKind,
   DocumentStatus,
   Prisma,
+  ResourcePermission,
+  UserRole,
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { AccessControlService } from '../access-control/access-control.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { WorkerSettingsService } from '../worker-settings/worker-settings.service';
@@ -62,6 +65,7 @@ export class DocumentsService {
     private readonly prismaService: PrismaService,
     private readonly s3Service: S3Service,
     private readonly workerSettingsService: WorkerSettingsService,
+    private readonly accessControlService: AccessControlService,
   ) {}
 
   async createUploadSession(
@@ -114,17 +118,21 @@ export class DocumentsService {
     };
   }
 
-  async listDocuments(userId: string, folderId?: string): Promise<Document[]> {
-    const where: Prisma.DocumentWhereInput = {
-      ownerId: userId,
-      deletedAt: null,
-    };
+  async listDocuments(
+    userId: string,
+    folderId?: string,
+    role: UserRole = UserRole.USER,
+  ): Promise<Document[]> {
+    const where = await this.accessControlService.createReadableDocumentWhere(
+      userId,
+      role,
+    );
 
     if (folderId === 'null') {
       where.folderId = null;
     } else if (folderId !== undefined) {
       this.assertValidUuid(folderId, 'Folder ID');
-      await this.findOwnedFolderOrThrow(userId, folderId);
+      await this.findReadableFolderOrThrow(userId, role, folderId);
       where.folderId = folderId;
     }
 
@@ -137,9 +145,14 @@ export class DocumentsService {
   async getDocument(
     userId: string,
     documentId: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentDetail> {
     const document = await this.prismaService.document.findFirst({
-      where: this.createOwnedDocumentWhere(userId, documentId),
+      where: await this.accessControlService.createReadableDocumentWhere(
+        userId,
+        role,
+        documentId,
+      ),
       include: {
         pages: {
           orderBy: { pageNumber: 'asc' },
@@ -158,8 +171,9 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     dto: UpdateDocumentDto,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentDetail> {
-    await this.findOwnedDocumentOrThrow(userId, documentId);
+    await this.findManageableDocumentOrThrow(userId, role, documentId);
 
     const data: Prisma.DocumentUpdateInput = {};
 
@@ -201,8 +215,13 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     dto: CompleteDocumentUploadDto,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentDetail> {
-    const document = await this.findOwnedDocumentOrThrow(userId, documentId);
+    const document = await this.findManageableDocumentOrThrow(
+      userId,
+      role,
+      documentId,
+    );
 
     if (document.status !== DocumentStatus.UPLOAD_PENDING) {
       throw new BadRequestException('Document upload is not pending.');
@@ -281,14 +300,19 @@ export class DocumentsService {
       );
     }
 
-    return this.getDocument(userId, documentId);
+    return this.getDocument(userId, documentId, role);
   }
 
   async createViewUrl(
     userId: string,
     documentId: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentViewResponse> {
-    const document = await this.findOwnedDocumentOrThrow(userId, documentId);
+    const document = await this.findReadableDocumentOrThrow(
+      userId,
+      role,
+      documentId,
+    );
 
     if (!document.uploadedAt || document.status === DocumentStatus.DELETED) {
       throw new BadRequestException('Document is not available for viewing.');
@@ -352,9 +376,14 @@ export class DocumentsService {
   async createPreviewUrl(
     userId: string,
     documentId: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentPreviewResponse> {
     const document = await this.prismaService.document.findFirst({
-      where: this.createOwnedDocumentWhere(userId, documentId),
+      where: await this.accessControlService.createReadableDocumentWhere(
+        userId,
+        role,
+        documentId,
+      ),
       include: {
         pages: {
           where: { pageNumber: 1 },
@@ -404,9 +433,13 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     dto: CreateDocumentThumbnailUploadSessionDto,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentThumbnailUploadSessionResponse> {
     const document = await this.prismaService.document.findFirst({
-      where: this.createOwnedDocumentWhere(userId, documentId),
+      where:
+        role === UserRole.ADMIN
+          ? { id: documentId, deletedAt: null }
+          : this.createOwnedDocumentWhere(userId, documentId),
       include: {
         pages: {
           where: { pageNumber: 1 },
@@ -518,9 +551,14 @@ export class DocumentsService {
   async getStatus(
     userId: string,
     documentId: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentStatusResponse> {
     const document = await this.prismaService.document.findFirst({
-      where: this.createOwnedDocumentWhere(userId, documentId),
+      where: await this.accessControlService.createReadableDocumentWhere(
+        userId,
+        role,
+        documentId,
+      ),
       include: {
         jobs: {
           orderBy: { queuedAt: 'desc' },
@@ -545,11 +583,15 @@ export class DocumentsService {
   async reprocessOcr(
     userId: string,
     documentId: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentStatusResponse> {
     const ocrOptions = await this.workerSettingsService.getOcrOptions();
     const job = await this.prismaService.$transaction(async (tx) => {
       const document = await tx.document.findFirst({
-        where: this.createOwnedDocumentWhere(userId, documentId),
+        where:
+          role === UserRole.ADMIN
+            ? { id: documentId, deletedAt: null }
+            : this.createOwnedDocumentWhere(userId, documentId),
         include: {
           pages: {
             orderBy: { pageNumber: 'asc' },
@@ -650,11 +692,15 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     jobId: string,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentStatusResponse> {
     const ocrOptions = await this.workerSettingsService.getOcrOptions();
     const job = await this.prismaService.$transaction(async (tx) => {
       const document = await tx.document.findFirst({
-        where: this.createOwnedDocumentWhere(userId, documentId),
+        where:
+          role === UserRole.ADMIN
+            ? { id: documentId, deletedAt: null }
+            : this.createOwnedDocumentWhere(userId, documentId),
         include: {
           pages: {
             orderBy: { pageNumber: 'asc' },
@@ -915,8 +961,9 @@ export class DocumentsService {
     userId: string,
     documentId: string,
     isPublic: boolean,
+    role: UserRole = UserRole.USER,
   ): Promise<DocumentDetail> {
-    await this.findOwnedDocumentOrThrow(userId, documentId);
+    await this.findManageableDocumentOrThrow(userId, role, documentId);
 
     return this.prismaService.document.update({
       where: { id: documentId },
@@ -929,14 +976,165 @@ export class DocumentsService {
     });
   }
 
-  async deleteDocument(userId: string, documentId: string): Promise<void> {
-    await this.findOwnedDocumentOrThrow(userId, documentId);
+  async deleteDocument(
+    userId: string,
+    documentId: string,
+    role: UserRole = UserRole.USER,
+  ): Promise<void> {
+    await this.findManageableDocumentOrThrow(userId, role, documentId);
 
     await this.prismaService.document.update({
       where: { id: documentId },
       data: {
         status: DocumentStatus.DELETED,
         deletedAt: new Date(),
+      },
+    });
+  }
+
+  async listPermissions(userId: string, documentId: string, role: UserRole) {
+    await this.accessControlService.assertCanManageDocument(
+      userId,
+      role,
+      documentId,
+    );
+
+    const document = await this.prismaService.document.findFirst({
+      where: { id: documentId, deletedAt: null },
+      include: {
+        permissions: {
+          include: {
+            user: true,
+            group: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+        folder: {
+          include: {
+            permissions: {
+              include: {
+                user: true,
+                group: true,
+              },
+              orderBy: { createdAt: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document was not found.');
+    }
+
+    return {
+      direct: document.permissions,
+      inheritedFromFolder: document.folder?.permissions ?? [],
+    };
+  }
+
+  async saveGroupPermission(
+    userId: string,
+    role: UserRole,
+    documentId: string,
+    groupId: string,
+    permission: ResourcePermission,
+  ) {
+    await this.accessControlService.assertCanManageDocument(
+      userId,
+      role,
+      documentId,
+    );
+    await this.findGroupOrThrow(groupId);
+    this.assertReadPermission(permission);
+
+    return this.prismaService.documentPermission.upsert({
+      where: {
+        documentId_groupId: {
+          documentId,
+          groupId,
+        },
+      },
+      create: {
+        documentId,
+        groupId,
+        permission: ResourcePermission.READ,
+      },
+      update: {
+        permission: ResourcePermission.READ,
+      },
+    });
+  }
+
+  async removeGroupPermission(
+    userId: string,
+    role: UserRole,
+    documentId: string,
+    groupId: string,
+  ): Promise<void> {
+    await this.accessControlService.assertCanManageDocument(
+      userId,
+      role,
+      documentId,
+    );
+
+    await this.prismaService.documentPermission.deleteMany({
+      where: {
+        documentId,
+        groupId,
+      },
+    });
+  }
+
+  async saveUserPermission(
+    userId: string,
+    role: UserRole,
+    documentId: string,
+    targetUserId: string,
+    permission: ResourcePermission,
+  ) {
+    await this.accessControlService.assertCanManageDocument(
+      userId,
+      role,
+      documentId,
+    );
+    await this.findUserOrThrow(targetUserId);
+    this.assertReadPermission(permission);
+
+    return this.prismaService.documentPermission.upsert({
+      where: {
+        documentId_userId: {
+          documentId,
+          userId: targetUserId,
+        },
+      },
+      create: {
+        documentId,
+        userId: targetUserId,
+        permission: ResourcePermission.READ,
+      },
+      update: {
+        permission: ResourcePermission.READ,
+      },
+    });
+  }
+
+  async removeUserPermission(
+    userId: string,
+    role: UserRole,
+    documentId: string,
+    targetUserId: string,
+  ): Promise<void> {
+    await this.accessControlService.assertCanManageDocument(
+      userId,
+      role,
+      documentId,
+    );
+
+    await this.prismaService.documentPermission.deleteMany({
+      where: {
+        documentId,
+        userId: targetUserId,
       },
     });
   }
@@ -951,6 +1149,77 @@ export class DocumentsService {
     }
 
     return document;
+  }
+
+  private async findReadableDocumentOrThrow(
+    userId: string,
+    role: UserRole,
+    documentId: string,
+  ) {
+    const document = await this.prismaService.document.findFirst({
+      where: await this.accessControlService.createReadableDocumentWhere(
+        userId,
+        role,
+        documentId,
+      ),
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document was not found.');
+    }
+
+    return document;
+  }
+
+  private async findManageableDocumentOrThrow(
+    userId: string,
+    role: UserRole,
+    documentId: string,
+  ) {
+    if (role === UserRole.ADMIN) {
+      const document = await this.prismaService.document.findFirst({
+        where: {
+          id: documentId,
+          deletedAt: null,
+        },
+      });
+
+      if (!document) {
+        throw new NotFoundException('Document was not found.');
+      }
+
+      return document;
+    }
+
+    return this.findOwnedDocumentOrThrow(userId, documentId);
+  }
+
+  private async findGroupOrThrow(groupId: string): Promise<void> {
+    const group = await this.prismaService.oidcGroup.findUnique({
+      where: { id: groupId },
+      select: { id: true },
+    });
+
+    if (!group) {
+      throw new NotFoundException('Group was not found.');
+    }
+  }
+
+  private async findUserOrThrow(userId: string): Promise<void> {
+    const user = await this.prismaService.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User was not found.');
+    }
+  }
+
+  private assertReadPermission(permission: ResourcePermission): void {
+    if (permission !== ResourcePermission.READ) {
+      throw new BadRequestException('Only READ permission is supported.');
+    }
   }
 
   private async findPublicDocumentOrThrow(documentId: string) {
@@ -1004,6 +1273,26 @@ export class DocumentsService {
     return folder;
   }
 
+  private async findReadableFolderOrThrow(
+    userId: string,
+    role: UserRole,
+    folderId: string,
+  ) {
+    const folder = await this.prismaService.folder.findFirst({
+      where: await this.accessControlService.createReadableFolderWhere(
+        userId,
+        role,
+        folderId,
+      ),
+    });
+
+    if (!folder) {
+      throw new NotFoundException('Folder was not found.');
+    }
+
+    return folder;
+  }
+
   private createOwnedDocumentWhere(
     userId: string,
     documentId: string,
@@ -1020,10 +1309,10 @@ export class DocumentsService {
   ): Prisma.DocumentWhereInput {
     return {
       id: documentId,
-      isPublic: true,
       status: DocumentStatus.READY,
       uploadedAt: { not: null },
       deletedAt: null,
+      OR: [{ isPublic: true }, { folder: { isPublic: true } }],
     };
   }
 

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
+import { AccessControlModule } from '../access-control/access-control.module';
 import { AuthModule } from '../auth/auth.module';
 import { S3Module } from '../s3/s3.module';
 import { WorkerSettingsModule } from '../worker-settings/worker-settings.module';
@@ -13,6 +14,7 @@ import { PdfOcrResultProcessor } from './pdf-ocr-result.processor';
 
 @Module({
   imports: [
+    AccessControlModule,
     AuthModule,
     S3Module,
     WorkerSettingsModule,

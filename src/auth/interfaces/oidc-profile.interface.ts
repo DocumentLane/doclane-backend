@@ -3,4 +3,5 @@ export interface OidcProfile {
   subject: string;
   email?: string;
   displayName?: string;
+  groupExternalIds: string[];
 }

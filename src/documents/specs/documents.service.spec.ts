@@ -7,7 +7,10 @@ import {
   DocumentOcrStatus,
   DocumentPageDerivativeKind,
   DocumentStatus,
+  ResourcePermission,
+  UserRole,
 } from '@prisma/client';
+import { AccessControlService } from '../../access-control/access-control.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { S3Service } from '../../s3/s3.service';
 import { WorkerSettingsService } from '../../worker-settings/worker-settings.service';
@@ -51,6 +54,21 @@ describe('DocumentsService', () => {
     documentPageDerivative: {
       upsert: jest.Mock;
     };
+    documentPermission: {
+      upsert: jest.Mock;
+      deleteMany: jest.Mock;
+    };
+    oidcGroup: {
+      findUnique: jest.Mock;
+    };
+    user: {
+      findUnique: jest.Mock;
+    };
+  };
+  let accessControlService: {
+    createReadableDocumentWhere: jest.Mock;
+    createReadableFolderWhere: jest.Mock;
+    assertCanManageDocument: jest.Mock;
   };
   let s3Service: {
     createGetObjectSignedUrl: jest.Mock;
@@ -110,6 +128,36 @@ describe('DocumentsService', () => {
       documentPageDerivative: {
         upsert: jest.fn(),
       },
+      documentPermission: {
+        upsert: jest.fn(),
+        deleteMany: jest.fn(),
+      },
+      oidcGroup: {
+        findUnique: jest.fn(),
+      },
+      user: {
+        findUnique: jest.fn(),
+      },
+    };
+    accessControlService = {
+      createReadableDocumentWhere: jest
+        .fn()
+        .mockImplementation(
+          (userId: string, _role: unknown, documentId?: string) => ({
+            ...(documentId === undefined ? {} : { id: documentId }),
+            ownerId: userId,
+            deletedAt: null,
+          }),
+        ),
+      createReadableFolderWhere: jest
+        .fn()
+        .mockImplementation(
+          (userId: string, _role: unknown, folderId?: string) => ({
+            ...(folderId === undefined ? {} : { id: folderId }),
+            ownerId: userId,
+          }),
+        ),
+      assertCanManageDocument: jest.fn().mockResolvedValue(undefined),
     };
     s3Service = {
       createGetObjectSignedUrl: jest.fn().mockResolvedValue('signed-url'),
@@ -146,6 +194,10 @@ describe('DocumentsService', () => {
               pdfOutputEnabled: true,
             }),
           },
+        },
+        {
+          provide: AccessControlService,
+          useValue: accessControlService,
         },
       ],
     }).compile();
@@ -449,6 +501,68 @@ describe('DocumentsService', () => {
     });
   });
 
+  it('lists direct and inherited document permissions for managers', async () => {
+    prismaService.document.findFirst.mockResolvedValue({
+      ...createDocument(),
+      permissions: [createDocumentPermission({ id: 'direct-permission-1' })],
+      folder: {
+        permissions: [
+          createDocumentPermission({ id: 'inherited-permission-1' }),
+        ],
+      },
+    });
+
+    await expect(
+      service.listPermissions('user-1', 'document-1', UserRole.USER),
+    ).resolves.toEqual({
+      direct: [expect.objectContaining({ id: 'direct-permission-1' })],
+      inheritedFromFolder: [
+        expect.objectContaining({ id: 'inherited-permission-1' }),
+      ],
+    });
+    expect(accessControlService.assertCanManageDocument).toHaveBeenCalledWith(
+      'user-1',
+      UserRole.USER,
+      'document-1',
+    );
+  });
+
+  it('adds a group read permission for a manageable document', async () => {
+    const permission = createDocumentPermission({
+      groupId: '11111111-1111-4111-8111-111111111111',
+    });
+    prismaService.oidcGroup.findUnique.mockResolvedValue({
+      id: '11111111-1111-4111-8111-111111111111',
+    });
+    prismaService.documentPermission.upsert.mockResolvedValue(permission);
+
+    await expect(
+      service.saveGroupPermission(
+        'user-1',
+        UserRole.USER,
+        'document-1',
+        '11111111-1111-4111-8111-111111111111',
+        ResourcePermission.READ,
+      ),
+    ).resolves.toEqual(permission);
+    expect(prismaService.documentPermission.upsert).toHaveBeenCalledWith({
+      where: {
+        documentId_groupId: {
+          documentId: 'document-1',
+          groupId: '11111111-1111-4111-8111-111111111111',
+        },
+      },
+      create: {
+        documentId: 'document-1',
+        groupId: '11111111-1111-4111-8111-111111111111',
+        permission: ResourcePermission.READ,
+      },
+      update: {
+        permission: ResourcePermission.READ,
+      },
+    });
+  });
+
   it('updates the document title for an owned document', async () => {
     prismaService.document.findFirst.mockResolvedValue(createDocument());
     prismaService.document.update.mockResolvedValue(
@@ -567,10 +681,10 @@ describe('DocumentsService', () => {
     expect(prismaService.document.findFirst).toHaveBeenCalledWith({
       where: {
         id: 'document-1',
-        isPublic: true,
         status: DocumentStatus.READY,
         uploadedAt: { not: null },
         deletedAt: null,
+        OR: [{ isPublic: true }, { folder: { isPublic: true } }],
       },
     });
   });
@@ -593,10 +707,10 @@ describe('DocumentsService', () => {
     expect(prismaService.document.findFirst).toHaveBeenCalledWith({
       where: {
         id: 'document-1',
-        isPublic: true,
         status: DocumentStatus.READY,
         uploadedAt: { not: null },
         deletedAt: null,
+        OR: [{ isPublic: true }, { folder: { isPublic: true } }],
       },
       include: {
         pages: {
@@ -1157,6 +1271,19 @@ function createFolder(overrides: Record<string, unknown> = {}) {
     id: '11111111-1111-4111-8111-111111111111',
     ownerId: 'user-1',
     name: 'Folder',
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+function createDocumentPermission(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'permission-1',
+    documentId: 'document-1',
+    userId: null,
+    groupId: '11111111-1111-4111-8111-111111111111',
+    permission: ResourcePermission.READ,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

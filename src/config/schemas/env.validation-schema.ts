@@ -8,6 +8,7 @@ export const environmentValidationSchema = Joi.object({
   OIDC_CLIENT_SECRET: Joi.string().optional(),
   OIDC_REDIRECT_URI: Joi.string().uri().optional(),
   OIDC_SCOPES: Joi.string().optional(),
+  OIDC_GROUPS_CLAIM: Joi.string().default('groups'),
   OIDC_POST_AUTH_REDIRECT_URL: Joi.string().uri().optional(),
   JWT_ACCESS_SECRET: Joi.string().min(32).optional(),
   JWT_REFRESH_SECRET: Joi.string().min(32).optional(),

@@ -7,6 +7,7 @@ export const authConfig = registerAs('auth', () => ({
     clientSecret: process.env.OIDC_CLIENT_SECRET,
     redirectUri: process.env.OIDC_REDIRECT_URI,
     scopes: process.env.OIDC_SCOPES ?? 'openid email profile',
+    groupsClaim: process.env.OIDC_GROUPS_CLAIM ?? 'groups',
   },
   jwt: {
     accessSecret: process.env.JWT_ACCESS_SECRET,

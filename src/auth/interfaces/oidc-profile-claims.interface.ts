@@ -4,4 +4,5 @@ export interface OidcProfileClaims {
   email?: string;
   name?: string;
   preferred_username?: string;
+  [claim: string]: unknown;
 }
