@@ -34,6 +34,9 @@ export class DocumentResponseDto {
   originalFileName!: string;
 
   @Expose()
+  folderId!: string | null;
+
+  @Expose()
   contentType!: string;
 
   @Expose()

@@ -11,6 +11,7 @@ import { redisConfig } from './config/configs/redis.config';
 import { s3Config } from './config/configs/s3.config';
 import { environmentValidationSchema } from './config/schemas/env.validation-schema';
 import { DocumentsModule } from './documents/documents.module';
+import { FoldersModule } from './folders/folders.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { S3Module } from './s3/s3.module';
@@ -52,6 +53,7 @@ import { WorkerSettingsModule } from './worker-settings/worker-settings.module';
     AuthModule,
     WorkerSettingsModule,
     DocumentsModule,
+    FoldersModule,
   ],
 })
 export class AppModule {}

@@ -4,6 +4,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUUID,
   MaxLength,
   Min,
 } from 'class-validator';
@@ -29,4 +30,8 @@ export class CreateDocumentUploadSessionDto {
   @IsString()
   @MaxLength(128)
   checksumSha256?: string;
+
+  @IsOptional()
+  @IsUUID()
+  folderId?: string;
 }

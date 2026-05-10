@@ -68,6 +68,10 @@ export class DocumentsService {
     userId: string,
     dto: CreateDocumentUploadSessionDto,
   ): Promise<DocumentUploadSessionResponse> {
+    if (dto.folderId !== undefined) {
+      await this.findOwnedFolderOrThrow(userId, dto.folderId);
+    }
+
     const documentId = randomUUID();
     const objectKey = this.createOriginalObjectKey(userId, documentId);
     const storageBucket = this.s3Service.getDefaultBucket();
@@ -79,6 +83,7 @@ export class DocumentsService {
       data: {
         id: documentId,
         ownerId: userId,
+        folderId: dto.folderId,
         title: dto.title ?? dto.originalFileName,
         originalFileName: dto.originalFileName,
         contentType: 'application/pdf',
@@ -109,12 +114,22 @@ export class DocumentsService {
     };
   }
 
-  listDocuments(userId: string): Promise<Document[]> {
+  async listDocuments(userId: string, folderId?: string): Promise<Document[]> {
+    const where: Prisma.DocumentWhereInput = {
+      ownerId: userId,
+      deletedAt: null,
+    };
+
+    if (folderId === 'null') {
+      where.folderId = null;
+    } else if (folderId !== undefined) {
+      this.assertValidUuid(folderId, 'Folder ID');
+      await this.findOwnedFolderOrThrow(userId, folderId);
+      where.folderId = folderId;
+    }
+
     return this.prismaService.document.findMany({
-      where: {
-        ownerId: userId,
-        deletedAt: null,
-      },
+      where,
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -156,6 +171,15 @@ export class DocumentsService {
       }
 
       data.title = title;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(dto, 'folderId')) {
+      if (dto.folderId === null) {
+        data.folder = { disconnect: true };
+      } else if (dto.folderId !== undefined) {
+        await this.findOwnedFolderOrThrow(userId, dto.folderId);
+        data.folder = { connect: { id: dto.folderId } };
+      }
     }
 
     if (Object.keys(data).length === 0) {
@@ -965,6 +989,21 @@ export class DocumentsService {
     return document;
   }
 
+  private async findOwnedFolderOrThrow(userId: string, folderId: string) {
+    const folder = await this.prismaService.folder.findFirst({
+      where: {
+        id: folderId,
+        ownerId: userId,
+      },
+    });
+
+    if (!folder) {
+      throw new NotFoundException('Folder was not found.');
+    }
+
+    return folder;
+  }
+
   private createOwnedDocumentWhere(
     userId: string,
     documentId: string,
@@ -990,6 +1029,15 @@ export class DocumentsService {
 
   private createOriginalObjectKey(userId: string, documentId: string): string {
     return `documents/${userId}/${documentId}/original.pdf`;
+  }
+
+  private assertValidUuid(value: string, fieldName: string): void {
+    const uuidPattern =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+    if (!uuidPattern.test(value)) {
+      throw new BadRequestException(`${fieldName} must be a UUID.`);
+    }
   }
 
   private createThumbnailObjectKey(

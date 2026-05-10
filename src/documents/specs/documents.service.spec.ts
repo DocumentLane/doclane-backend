@@ -24,8 +24,14 @@ describe('DocumentsService', () => {
   let prismaService: {
     $transaction: jest.Mock;
     document: {
+      count: jest.Mock;
+      create: jest.Mock;
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       update: jest.Mock;
+    };
+    folder: {
+      findFirst: jest.Mock;
     };
     documentJob: {
       findFirst: jest.Mock;
@@ -74,8 +80,14 @@ describe('DocumentsService', () => {
     prismaService = {
       $transaction: jest.fn(runTransaction),
       document: {
+        count: jest.fn(),
+        create: jest.fn(),
         findFirst: jest.fn(),
+        findMany: jest.fn(),
         update: jest.fn(),
+      },
+      folder: {
+        findFirst: jest.fn(),
       },
       documentJob: {
         findFirst: jest.fn(),
@@ -139,6 +151,108 @@ describe('DocumentsService', () => {
     }).compile();
 
     service = module.get(DocumentsService);
+  });
+
+  it('creates an upload session in an owned folder', async () => {
+    prismaService.folder.findFirst.mockResolvedValue(createFolder());
+
+    await expect(
+      service.createUploadSession('user-1', {
+        originalFileName: 'document.pdf',
+        folderId: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).resolves.toMatchObject({
+      uploadUrl: 'upload-url',
+      method: 'PUT',
+      storageBucket: 'documents',
+      contentType: 'application/pdf',
+    });
+    expect(prismaService.folder.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: '11111111-1111-4111-8111-111111111111',
+        ownerId: 'user-1',
+      },
+    });
+    expect(prismaService.document.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        ownerId: 'user-1',
+        folderId: '11111111-1111-4111-8111-111111111111',
+        title: 'document.pdf',
+      }) as object,
+    });
+  });
+
+  it('rejects upload sessions for folders not owned by the user', async () => {
+    prismaService.folder.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.createUploadSession('user-1', {
+        originalFileName: 'document.pdf',
+        folderId: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).rejects.toThrow('Folder was not found.');
+    expect(prismaService.document.create).not.toHaveBeenCalled();
+    expect(s3Service.createPutObjectSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('lists all owned documents by default', async () => {
+    const documents = [createDocument()];
+    prismaService.document.findMany.mockResolvedValue(documents);
+
+    await expect(service.listDocuments('user-1')).resolves.toEqual(documents);
+    expect(prismaService.document.findMany).toHaveBeenCalledWith({
+      where: {
+        ownerId: 'user-1',
+        deletedAt: null,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  it('lists documents in a folder', async () => {
+    const documents = [
+      createDocument({ folderId: '11111111-1111-4111-8111-111111111111' }),
+    ];
+    prismaService.folder.findFirst.mockResolvedValue(createFolder());
+    prismaService.document.findMany.mockResolvedValue(documents);
+
+    await expect(
+      service.listDocuments('user-1', '11111111-1111-4111-8111-111111111111'),
+    ).resolves.toEqual(documents);
+    expect(prismaService.document.findMany).toHaveBeenCalledWith({
+      where: {
+        ownerId: 'user-1',
+        deletedAt: null,
+        folderId: '11111111-1111-4111-8111-111111111111',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  });
+
+  it('rejects listing documents for folders not owned by the user', async () => {
+    prismaService.folder.findFirst.mockResolvedValue(null);
+
+    await expect(
+      service.listDocuments('user-1', '11111111-1111-4111-8111-111111111111'),
+    ).rejects.toThrow('Folder was not found.');
+    expect(prismaService.document.findMany).not.toHaveBeenCalled();
+  });
+
+  it('lists root documents when folderId is null', async () => {
+    const documents = [createDocument({ folderId: null })];
+    prismaService.document.findMany.mockResolvedValue(documents);
+
+    await expect(service.listDocuments('user-1', 'null')).resolves.toEqual(
+      documents,
+    );
+    expect(prismaService.document.findMany).toHaveBeenCalledWith({
+      where: {
+        ownerId: 'user-1',
+        deletedAt: null,
+        folderId: null,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
   });
 
   it('uses the original PDF for viewing before OCR PDF is ready', async () => {
@@ -349,6 +463,69 @@ describe('DocumentsService', () => {
     expect(prismaService.document.update).toHaveBeenCalledWith({
       where: { id: 'document-1' },
       data: { title: 'Updated title' },
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+        },
+      },
+    });
+  });
+
+  it('updates the document title and moves it to an owned folder', async () => {
+    prismaService.document.findFirst.mockResolvedValue(createDocument());
+    prismaService.folder.findFirst.mockResolvedValue(createFolder());
+    prismaService.document.update.mockResolvedValue(
+      createDocument({
+        title: 'Updated title',
+        folderId: '11111111-1111-4111-8111-111111111111',
+      }),
+    );
+
+    await expect(
+      service.updateDocument('user-1', 'document-1', {
+        title: '  Updated title  ',
+        folderId: '11111111-1111-4111-8111-111111111111',
+      }),
+    ).resolves.toMatchObject({
+      title: 'Updated title',
+      folderId: '11111111-1111-4111-8111-111111111111',
+    });
+    expect(prismaService.folder.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: '11111111-1111-4111-8111-111111111111',
+        ownerId: 'user-1',
+      },
+    });
+    expect(prismaService.document.update).toHaveBeenCalledWith({
+      where: { id: 'document-1' },
+      data: {
+        title: 'Updated title',
+        folder: { connect: { id: '11111111-1111-4111-8111-111111111111' } },
+      },
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+        },
+      },
+    });
+  });
+
+  it('moves a document to the root folder', async () => {
+    prismaService.document.findFirst.mockResolvedValue(
+      createDocument({ folderId: '11111111-1111-4111-8111-111111111111' }),
+    );
+    prismaService.document.update.mockResolvedValue(
+      createDocument({ folderId: null }),
+    );
+
+    await expect(
+      service.updateDocument('user-1', 'document-1', {
+        folderId: null,
+      }),
+    ).resolves.toMatchObject({ folderId: null });
+    expect(prismaService.document.update).toHaveBeenCalledWith({
+      where: { id: 'document-1' },
+      data: { folder: { disconnect: true } },
       include: {
         pages: {
           orderBy: { pageNumber: 'asc' },
@@ -942,6 +1119,7 @@ function createDocument(overrides: Record<string, unknown> = {}) {
   return {
     id: 'document-1',
     ownerId: 'user-1',
+    folderId: null,
     title: 'Document',
     originalFileName: 'document.pdf',
     contentType: 'application/pdf',
@@ -968,6 +1146,17 @@ function createDocument(overrides: Record<string, unknown> = {}) {
     uploadedAt: new Date(),
     metadataExtractedAt: new Date(),
     deletedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    ...overrides,
+  };
+}
+
+function createFolder(overrides: Record<string, unknown> = {}) {
+  return {
+    id: '11111111-1111-4111-8111-111111111111',
+    ownerId: 'user-1',
+    name: 'Folder',
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,

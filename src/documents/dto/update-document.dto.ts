@@ -1,4 +1,11 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+  ValidateIf,
+} from 'class-validator';
 
 export class UpdateDocumentDto {
   @IsOptional()
@@ -6,4 +13,8 @@ export class UpdateDocumentDto {
   @IsNotEmpty()
   @MaxLength(255)
   title?: string;
+
+  @ValidateIf((_, value: unknown) => value !== null && value !== undefined)
+  @IsUUID()
+  folderId?: string | null;
 }

@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
   SerializeOptions,
   UseGuards,
@@ -58,8 +59,11 @@ export class DocumentsController {
 
   @Get()
   @SerializeOptions({ type: DocumentResponseDto })
-  listDocuments(@Req() request: AuthenticatedRequest): Promise<Document[]> {
-    return this.documentsService.listDocuments(request.user.sub);
+  listDocuments(
+    @Req() request: AuthenticatedRequest,
+    @Query('folderId') folderId?: string,
+  ): Promise<Document[]> {
+    return this.documentsService.listDocuments(request.user.sub, folderId);
   }
 
   @Get(':id')
