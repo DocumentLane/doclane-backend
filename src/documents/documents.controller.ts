@@ -16,6 +16,7 @@ import {
 import { Document } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../auth/interfaces/authenticated-request.interface';
+import { CreateDocumentThumbnailUploadSessionDto } from './dto/create-document-thumbnail-upload-session.dto';
 import { CompleteDocumentUploadDto } from './dto/complete-document-upload.dto';
 import { CreateDocumentUploadSessionDto } from './dto/create-document-upload-session.dto';
 import { DocumentBookmarkResponseDto } from './dto/document-bookmark-response.dto';
@@ -23,9 +24,11 @@ import { DocumentNoteResponseDto } from './dto/document-note-response.dto';
 import { DocumentPreviewResponseDto } from './dto/document-preview-response.dto';
 import { DocumentResponseDto } from './dto/document-response.dto';
 import { DocumentStatusResponseDto } from './dto/document-status-response.dto';
+import { DocumentThumbnailUploadSessionResponseDto } from './dto/document-thumbnail-upload-session-response.dto';
 import { DocumentUploadSessionResponseDto } from './dto/document-upload-session-response.dto';
 import { DocumentViewResponseDto } from './dto/document-view-response.dto';
 import { SaveDocumentNoteDto } from './dto/save-document-note.dto';
+import { UpdateDocumentDto } from './dto/update-document.dto';
 import { UpdateDocumentPublicAccessDto } from './dto/update-document-public-access.dto';
 import { UpdateDocumentReadingPositionDto } from './dto/update-document-reading-position.dto';
 import { DocumentsService } from './documents.service';
@@ -34,6 +37,7 @@ import { DocumentDetail } from './interfaces/document-detail.interface';
 import { DocumentNoteResponse } from './interfaces/document-note-response.interface';
 import { DocumentPreviewResponse } from './interfaces/document-preview-response.interface';
 import { DocumentStatusResponse } from './interfaces/document-status-response.interface';
+import { DocumentThumbnailUploadSessionResponse } from './interfaces/document-thumbnail-upload-session-response.interface';
 import { DocumentUploadSessionResponse } from './interfaces/document-upload-session-response.interface';
 import { DocumentViewResponse } from './interfaces/document-view-response.interface';
 
@@ -67,6 +71,20 @@ export class DocumentsController {
     return this.documentsService.getDocument(request.user.sub, documentId);
   }
 
+  @Patch(':id')
+  @SerializeOptions({ type: DocumentResponseDto })
+  updateDocument(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Body() dto: UpdateDocumentDto,
+  ): Promise<DocumentDetail> {
+    return this.documentsService.updateDocument(
+      request.user.sub,
+      documentId,
+      dto,
+    );
+  }
+
   @Post(':id/complete')
   @SerializeOptions({ type: DocumentResponseDto })
   completeUpload(
@@ -97,6 +115,20 @@ export class DocumentsController {
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentPreviewResponse> {
     return this.documentsService.createPreviewUrl(request.user.sub, documentId);
+  }
+
+  @Post(':id/thumbnail/upload-session')
+  @SerializeOptions({ type: DocumentThumbnailUploadSessionResponseDto })
+  createThumbnailUploadSession(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Body() dto: CreateDocumentThumbnailUploadSessionDto,
+  ): Promise<DocumentThumbnailUploadSessionResponse> {
+    return this.documentsService.createThumbnailUploadSession(
+      request.user.sub,
+      documentId,
+      dto,
+    );
   }
 
   @Get(':id/status')
@@ -142,6 +174,20 @@ export class DocumentsController {
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentStatusResponse> {
     return this.documentsService.reprocessOcr(request.user.sub, documentId);
+  }
+
+  @Post(':id/jobs/:jobId/restart')
+  @SerializeOptions({ type: DocumentStatusResponseDto })
+  restartJob(
+    @Req() request: AuthenticatedRequest,
+    @Param('id', ParseUUIDPipe) documentId: string,
+    @Param('jobId', ParseUUIDPipe) jobId: string,
+  ): Promise<DocumentStatusResponse> {
+    return this.documentsService.restartJob(
+      request.user.sub,
+      documentId,
+      jobId,
+    );
   }
 
   @Get(':id/bookmarks')

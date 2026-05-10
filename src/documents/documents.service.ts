@@ -22,15 +22,32 @@ import { PrismaService } from '../prisma/prisma.service';
 import { S3Service } from '../s3/s3.service';
 import { WorkerSettingsService } from '../worker-settings/worker-settings.service';
 import { CompleteDocumentUploadDto } from './dto/complete-document-upload.dto';
+import { CreateDocumentThumbnailUploadSessionDto } from './dto/create-document-thumbnail-upload-session.dto';
 import { CreateDocumentUploadSessionDto } from './dto/create-document-upload-session.dto';
+import { UpdateDocumentDto } from './dto/update-document.dto';
 import { DocumentDetail } from './interfaces/document-detail.interface';
 import { DocumentPreviewResponse } from './interfaces/document-preview-response.interface';
 import { DocumentStatusResponse } from './interfaces/document-status-response.interface';
+import { DocumentThumbnailUploadSessionResponse } from './interfaces/document-thumbnail-upload-session-response.interface';
 import { DocumentUploadSessionResponse } from './interfaces/document-upload-session-response.interface';
 import { DocumentViewResponse } from './interfaces/document-view-response.interface';
 import { PdfMetadataJobPayload } from './interfaces/pdf-metadata-job-payload.interface';
 import { PdfOcrJobPayload } from './interfaces/pdf-ocr-job-payload.interface';
 import { Queue } from 'bullmq';
+
+type RestartedDocumentJob =
+  | {
+      type: typeof DocumentJobType.PDF_METADATA;
+      id: string;
+      maxAttempts: number;
+      payload: PdfMetadataJobPayload;
+    }
+  | {
+      type: typeof DocumentJobType.PDF_OCR;
+      id: string;
+      maxAttempts: number;
+      payload: PdfOcrJobPayload;
+    };
 
 @Injectable()
 export class DocumentsService {
@@ -120,6 +137,40 @@ export class DocumentsService {
     }
 
     return document;
+  }
+
+  async updateDocument(
+    userId: string,
+    documentId: string,
+    dto: UpdateDocumentDto,
+  ): Promise<DocumentDetail> {
+    await this.findOwnedDocumentOrThrow(userId, documentId);
+
+    const data: Prisma.DocumentUpdateInput = {};
+
+    if (dto.title !== undefined) {
+      const title = dto.title.trim();
+
+      if (!title) {
+        throw new BadRequestException('Document title must not be empty.');
+      }
+
+      data.title = title;
+    }
+
+    if (Object.keys(data).length === 0) {
+      throw new BadRequestException('No document updates were provided.');
+    }
+
+    return this.prismaService.document.update({
+      where: { id: documentId },
+      data,
+      include: {
+        pages: {
+          orderBy: { pageNumber: 'asc' },
+        },
+      },
+    });
   }
 
   async completeUpload(
@@ -325,6 +376,93 @@ export class DocumentsService {
     };
   }
 
+  async createThumbnailUploadSession(
+    userId: string,
+    documentId: string,
+    dto: CreateDocumentThumbnailUploadSessionDto,
+  ): Promise<DocumentThumbnailUploadSessionResponse> {
+    const document = await this.prismaService.document.findFirst({
+      where: this.createOwnedDocumentWhere(userId, documentId),
+      include: {
+        pages: {
+          where: { pageNumber: 1 },
+          take: 1,
+        },
+      },
+    });
+
+    if (!document) {
+      throw new NotFoundException('Document was not found.');
+    }
+
+    if (!document.uploadedAt || document.status === DocumentStatus.DELETED) {
+      throw new BadRequestException(
+        'Document is not available for thumbnail update.',
+      );
+    }
+
+    const page = document.pages[0];
+
+    if (!page) {
+      throw new BadRequestException(
+        'Document pages are not available for thumbnail update.',
+      );
+    }
+
+    const objectKey = this.createThumbnailObjectKey(
+      userId,
+      document.id,
+      dto.contentType,
+    );
+    const storageBucket = this.s3Service.getDefaultBucket();
+    const expiresAt = new Date(
+      Date.now() + this.uploadUrlExpiresInSeconds * 1000,
+    );
+
+    await this.prismaService.documentPageDerivative.upsert({
+      where: {
+        pageId_kind: {
+          pageId: page.id,
+          kind: DocumentPageDerivativeKind.THUMBNAIL,
+        },
+      },
+      create: {
+        pageId: page.id,
+        kind: DocumentPageDerivativeKind.THUMBNAIL,
+        storageBucket,
+        objectKey,
+        contentType: dto.contentType,
+        width: dto.width ?? null,
+        height: dto.height ?? null,
+        sizeBytes: dto.sizeBytes === undefined ? null : BigInt(dto.sizeBytes),
+      },
+      update: {
+        storageBucket,
+        objectKey,
+        contentType: dto.contentType,
+        width: dto.width ?? null,
+        height: dto.height ?? null,
+        sizeBytes: dto.sizeBytes === undefined ? null : BigInt(dto.sizeBytes),
+      },
+    });
+
+    const uploadUrl = await this.s3Service.createPutObjectSignedUrl({
+      key: objectKey,
+      contentType: dto.contentType,
+      expiresInSeconds: this.uploadUrlExpiresInSeconds,
+    });
+
+    return {
+      documentId: document.id,
+      uploadUrl,
+      method: 'PUT',
+      storageBucket,
+      objectKey,
+      contentType: dto.contentType,
+      expiresAt,
+    };
+  }
+
   async createPublicPreviewUrl(
     documentId: string,
   ): Promise<DocumentPreviewResponse> {
@@ -480,6 +618,143 @@ export class DocumentsService {
 
       throw new InternalServerErrorException('Failed to enqueue pdf OCR job.');
     }
+
+    return this.getStatus(userId, documentId);
+  }
+
+  async restartJob(
+    userId: string,
+    documentId: string,
+    jobId: string,
+  ): Promise<DocumentStatusResponse> {
+    const ocrOptions = await this.workerSettingsService.getOcrOptions();
+    const job = await this.prismaService.$transaction(async (tx) => {
+      const document = await tx.document.findFirst({
+        where: this.createOwnedDocumentWhere(userId, documentId),
+        include: {
+          pages: {
+            orderBy: { pageNumber: 'asc' },
+          },
+        },
+      });
+
+      if (!document) {
+        throw new NotFoundException('Document was not found.');
+      }
+
+      if (!document.uploadedAt || document.status === DocumentStatus.DELETED) {
+        throw new BadRequestException(
+          'Document is not available for job restart.',
+        );
+      }
+
+      const previousJob = await tx.documentJob.findFirst({
+        where: {
+          id: jobId,
+          documentId: document.id,
+        },
+      });
+
+      if (!previousJob) {
+        throw new NotFoundException('Document job was not found.');
+      }
+
+      if (
+        previousJob.status !== DocumentJobStatus.FAILED &&
+        previousJob.status !== DocumentJobStatus.CANCELLED
+      ) {
+        throw new BadRequestException(
+          'Only failed or cancelled document jobs can be restarted.',
+        );
+      }
+
+      await this.assertNoActiveJob(tx, document.id, previousJob.type);
+
+      if (previousJob.type === DocumentJobType.PDF_METADATA) {
+        const payload: PdfMetadataJobPayload = {
+          documentId: document.id,
+          objectKey: document.originalObjectKey,
+          storageBucket: document.storageBucket,
+        };
+
+        await tx.document.update({
+          where: { id: document.id },
+          data: {
+            status: DocumentStatus.METADATA_PROCESSING,
+            linearizationStatus: DocumentLinearizationStatus.PROCESSING,
+          },
+        });
+
+        const restartedJob = await tx.documentJob.create({
+          data: {
+            documentId: document.id,
+            type: DocumentJobType.PDF_METADATA,
+            status: DocumentJobStatus.QUEUED,
+            queueName: 'pdf-metadata',
+            payload: this.toMetadataPayloadJson(payload),
+          },
+        });
+
+        return {
+          type: DocumentJobType.PDF_METADATA,
+          id: restartedJob.id,
+          maxAttempts: restartedJob.maxAttempts,
+          payload,
+        };
+      }
+
+      if (previousJob.type === DocumentJobType.PDF_OCR) {
+        if (document.status !== DocumentStatus.READY) {
+          throw new BadRequestException(
+            'Document is not ready for OCR job restart.',
+          );
+        }
+
+        if (document.ocrStatus === DocumentOcrStatus.PROCESSING) {
+          throw new BadRequestException('Document OCR is already processing.');
+        }
+
+        if (document.pages.length === 0) {
+          throw new BadRequestException(
+            'Document pages are not available for OCR job restart.',
+          );
+        }
+
+        const payload: PdfOcrJobPayload = {
+          documentId: document.id,
+          objectKey: document.linearizedObjectKey ?? document.originalObjectKey,
+          storageBucket: document.storageBucket,
+          ocrOptions,
+          pages: document.pages.map((page) => ({
+            pageNumber: page.pageNumber,
+            width: page.width,
+            height: page.height,
+            rotation: page.rotation,
+          })),
+        };
+
+        const restartedJob = await tx.documentJob.create({
+          data: {
+            documentId: document.id,
+            type: DocumentJobType.PDF_OCR,
+            status: DocumentJobStatus.QUEUED,
+            queueName: 'pdf-ocr',
+            payload: this.toOcrPayloadJson(payload),
+          },
+        });
+
+        return {
+          type: DocumentJobType.PDF_OCR,
+          id: restartedJob.id,
+          maxAttempts: restartedJob.maxAttempts,
+          payload,
+        };
+      }
+
+      throw new BadRequestException('Document job type cannot be restarted.');
+    });
+
+    await this.enqueueRestartedJob(job);
 
     return this.getStatus(userId, documentId);
   }
@@ -717,6 +992,151 @@ export class DocumentsService {
     return `documents/${userId}/${documentId}/original.pdf`;
   }
 
+  private createThumbnailObjectKey(
+    userId: string,
+    documentId: string,
+    contentType: string,
+  ): string {
+    const extensionByContentType: Record<string, string> = {
+      'image/jpeg': 'jpg',
+      'image/png': 'png',
+      'image/webp': 'webp',
+    };
+
+    return `documents/${userId}/${documentId}/thumbnails/${randomUUID()}.${
+      extensionByContentType[contentType]
+    }`;
+  }
+
+  private async assertNoActiveJob(
+    tx: Prisma.TransactionClient,
+    documentId: string,
+    type: DocumentJobType,
+  ): Promise<void> {
+    const activeJob = await tx.documentJob.findFirst({
+      where: {
+        documentId,
+        type,
+        status: {
+          in: [
+            DocumentJobStatus.QUEUED,
+            DocumentJobStatus.ACTIVE,
+            DocumentJobStatus.RETRYING,
+          ],
+        },
+      },
+    });
+
+    if (activeJob) {
+      throw new BadRequestException(
+        'A document job of this type is already running.',
+      );
+    }
+  }
+
+  private async enqueueRestartedJob(job: RestartedDocumentJob): Promise<void> {
+    if (job.type === DocumentJobType.PDF_METADATA) {
+      await this.enqueueRestartedMetadataJob(job);
+      return;
+    }
+
+    await this.enqueueRestartedOcrJob(job);
+  }
+
+  private async enqueueRestartedMetadataJob(
+    job: Extract<
+      RestartedDocumentJob,
+      { type: typeof DocumentJobType.PDF_METADATA }
+    >,
+  ): Promise<void> {
+    try {
+      const bullJob = await this.pdfMetadataQueue.add(
+        'extract-metadata',
+        job.payload,
+        {
+          jobId: job.id,
+          attempts: job.maxAttempts,
+          removeOnComplete: false,
+          removeOnFail: false,
+        },
+      );
+
+      await this.prismaService.documentJob.update({
+        where: { id: job.id },
+        data: { bullJobId: bullJob.id },
+      });
+    } catch {
+      await this.prismaService.$transaction([
+        this.prismaService.document.update({
+          where: { id: job.payload.documentId },
+          data: { status: DocumentStatus.PROCESSING_FAILED },
+        }),
+        this.prismaService.documentJob.update({
+          where: { id: job.id },
+          data: {
+            status: DocumentJobStatus.FAILED,
+            errorCode: 'QUEUE_ENQUEUE_FAILED',
+            errorMessage: 'Failed to enqueue pdf metadata job.',
+            completedAt: new Date(),
+          },
+        }),
+      ]);
+
+      throw new InternalServerErrorException(
+        'Failed to enqueue pdf metadata job.',
+      );
+    }
+  }
+
+  private async enqueueRestartedOcrJob(
+    job: Extract<
+      RestartedDocumentJob,
+      { type: typeof DocumentJobType.PDF_OCR }
+    >,
+  ): Promise<void> {
+    try {
+      const bullJob = await this.pdfOcrQueue.add(
+        'recognize-pages',
+        job.payload,
+        {
+          jobId: job.id,
+          attempts: job.maxAttempts,
+          removeOnComplete: false,
+          removeOnFail: false,
+        },
+      );
+
+      await this.prismaService.$transaction([
+        this.prismaService.document.update({
+          where: { id: job.payload.documentId },
+          data: { ocrStatus: DocumentOcrStatus.PROCESSING },
+        }),
+        this.prismaService.documentJob.update({
+          where: { id: job.id },
+          data: { bullJobId: bullJob.id },
+        }),
+      ]);
+    } catch {
+      await this.prismaService.$transaction([
+        this.prismaService.document.update({
+          where: { id: job.payload.documentId },
+          data: { ocrStatus: DocumentOcrStatus.FAILED },
+        }),
+        this.prismaService.documentJob.update({
+          where: { id: job.id },
+          data: {
+            status: DocumentJobStatus.FAILED,
+            errorCode: 'QUEUE_ENQUEUE_FAILED',
+            errorMessage: 'Failed to enqueue pdf OCR job.',
+            completedAt: new Date(),
+          },
+        }),
+      ]);
+
+      throw new InternalServerErrorException('Failed to enqueue pdf OCR job.');
+    }
+  }
+
   private createViewTarget(document: Document): {
     objectKey: string;
     isLinearized: boolean;
@@ -770,6 +1190,16 @@ export class DocumentsService {
         height: page.height,
         rotation: page.rotation,
       })),
+    };
+  }
+
+  private toMetadataPayloadJson(
+    payload: PdfMetadataJobPayload,
+  ): Prisma.InputJsonObject {
+    return {
+      documentId: payload.documentId,
+      objectKey: payload.objectKey,
+      storageBucket: payload.storageBucket,
     };
   }
 
