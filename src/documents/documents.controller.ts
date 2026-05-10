@@ -14,7 +14,13 @@ import {
   SerializeOptions,
   UseGuards,
 } from '@nestjs/common';
-import { Document, DocumentPermission } from '@prisma/client';
+import {
+  AuditAction,
+  AuditResourceType,
+  Document,
+  DocumentPermission,
+} from '@prisma/client';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../auth/interfaces/authenticated-request.interface';
 import { CreateDocumentThumbnailUploadSessionDto } from './dto/create-document-thumbnail-upload-session.dto';
@@ -51,15 +57,37 @@ import { DocumentViewResponse } from './interfaces/document-view-response.interf
 @UseGuards(JwtAuthGuard)
 @SerializeOptions({ strategy: 'excludeAll' })
 export class DocumentsController {
-  constructor(private readonly documentsService: DocumentsService) {}
+  constructor(
+    private readonly documentsService: DocumentsService,
+    private readonly auditLogsService: AuditLogsService,
+  ) {}
 
   @Post('upload-session')
   @SerializeOptions({ type: DocumentUploadSessionResponseDto })
-  createUploadSession(
+  async createUploadSession(
     @Req() request: AuthenticatedRequest,
     @Body() dto: CreateDocumentUploadSessionDto,
   ): Promise<DocumentUploadSessionResponse> {
-    return this.documentsService.createUploadSession(request.user.sub, dto);
+    const response = await this.documentsService.createUploadSession(
+      request.user.sub,
+      dto,
+    );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_CREATE_UPLOAD_SESSION,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: response.documentId,
+      summary: `Document upload session created: ${dto.originalFileName}`,
+      after: {
+        title: dto.title ?? dto.originalFileName,
+        originalFileName: dto.originalFileName,
+        folderId: dto.folderId ?? null,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return response;
   }
 
   @Get()
@@ -88,63 +116,117 @@ export class DocumentsController {
 
   @Get(':id')
   @SerializeOptions({ type: DocumentResponseDto })
-  getDocument(
+  async getDocument(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentDetail> {
-    return this.documentsService.getDocument(
+    const document = await this.documentsService.getDocument(
       request.user.sub,
       documentId,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_READ,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: document.id,
+      summary: `Document read: ${document.title}`,
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return document;
   }
 
   @Patch(':id')
   @SerializeOptions({ type: DocumentResponseDto })
-  updateDocument(
+  async updateDocument(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Body() dto: UpdateDocumentDto,
   ): Promise<DocumentDetail> {
-    return this.documentsService.updateDocument(
+    const document = await this.documentsService.updateDocument(
       request.user.sub,
       documentId,
       dto,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_UPDATE,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: document.id,
+      summary: `Document updated: ${document.title}`,
+      after: {
+        title: document.title,
+        folderId: document.folderId,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return document;
   }
 
   @Post(':id/complete')
   @SerializeOptions({ type: DocumentResponseDto })
-  completeUpload(
+  async completeUpload(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Body() dto: CompleteDocumentUploadDto,
   ): Promise<DocumentDetail> {
-    return this.documentsService.completeUpload(
+    const document = await this.documentsService.completeUpload(
       request.user.sub,
       documentId,
       dto,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_COMPLETE_UPLOAD,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: document.id,
+      summary: `Document upload completed: ${document.title}`,
+      after: {
+        status: document.status,
+        sizeBytes: document.sizeBytes?.toString() ?? null,
+        checksumSha256: document.checksumSha256,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return document;
   }
 
   @Get(':id/view')
   @SerializeOptions({ type: DocumentViewResponseDto })
-  createViewUrl(
+  async createViewUrl(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentViewResponse> {
-    return this.documentsService.createViewUrl(
+    const response = await this.documentsService.createViewUrl(
       request.user.sub,
       documentId,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_VIEW,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: response.documentId,
+      summary: 'Document view URL created.',
+      after: { isLinearized: response.isLinearized },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return response;
   }
 
   @Get(':id/preview')
   @SerializeOptions({ type: DocumentPreviewResponseDto })
-  createPreviewUrl(
+  async createPreviewUrl(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentPreviewResponse> {
@@ -199,17 +281,29 @@ export class DocumentsController {
 
   @Patch(':id/public-access')
   @SerializeOptions({ type: DocumentResponseDto })
-  updatePublicAccess(
+  async updatePublicAccess(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Body() dto: UpdateDocumentPublicAccessDto,
   ): Promise<DocumentDetail> {
-    return this.documentsService.updatePublicAccess(
+    const document = await this.documentsService.updatePublicAccess(
       request.user.sub,
       documentId,
       dto.isPublic,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_PUBLIC_ACCESS_UPDATE,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: document.id,
+      summary: `Document public access ${document.isPublic ? 'enabled' : 'disabled'}.`,
+      after: { isPublic: document.isPublic },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return document;
   }
 
   @Get(':id/permissions')
@@ -227,92 +321,168 @@ export class DocumentsController {
 
   @Put(':id/permissions/groups/:groupId')
   @SerializeOptions({ type: ResourcePermissionResponseDto })
-  saveGroupPermission(
+  async saveGroupPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Param('groupId', ParseUUIDPipe) groupId: string,
     @Body() dto: SaveResourcePermissionDto,
   ): Promise<DocumentPermission> {
-    return this.documentsService.saveGroupPermission(
+    const permission = await this.documentsService.saveGroupPermission(
       request.user.sub,
       request.user.role,
       documentId,
       groupId,
       dto.permission,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_PERMISSION_GRANT,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: documentId,
+      summary: `Document group permission granted to ${groupId}.`,
+      after: {
+        permissionId: permission.id,
+        groupId,
+        permission: permission.permission,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return permission;
   }
 
   @Delete(':id/permissions/groups/:groupId')
-  removeGroupPermission(
+  async removeGroupPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Param('groupId', ParseUUIDPipe) groupId: string,
   ): Promise<void> {
-    return this.documentsService.removeGroupPermission(
+    await this.documentsService.removeGroupPermission(
       request.user.sub,
       request.user.role,
       documentId,
       groupId,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_PERMISSION_REVOKE,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: documentId,
+      summary: `Document group permission revoked from ${groupId}.`,
+      before: { groupId },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
   }
 
   @Put(':id/permissions/users/:userId')
   @SerializeOptions({ type: ResourcePermissionResponseDto })
-  saveUserPermission(
+  async saveUserPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Param('userId', ParseUUIDPipe) targetUserId: string,
     @Body() dto: SaveResourcePermissionDto,
   ): Promise<DocumentPermission> {
-    return this.documentsService.saveUserPermission(
+    const permission = await this.documentsService.saveUserPermission(
       request.user.sub,
       request.user.role,
       documentId,
       targetUserId,
       dto.permission,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_PERMISSION_GRANT,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: documentId,
+      summary: `Document user permission granted to ${targetUserId}.`,
+      after: {
+        permissionId: permission.id,
+        userId: targetUserId,
+        permission: permission.permission,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return permission;
   }
 
   @Delete(':id/permissions/users/:userId')
-  removeUserPermission(
+  async removeUserPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Param('userId', ParseUUIDPipe) targetUserId: string,
   ): Promise<void> {
-    return this.documentsService.removeUserPermission(
+    await this.documentsService.removeUserPermission(
       request.user.sub,
       request.user.role,
       documentId,
       targetUserId,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_PERMISSION_REVOKE,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: documentId,
+      summary: `Document user permission revoked from ${targetUserId}.`,
+      before: { userId: targetUserId },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
   }
 
   @Post(':id/ocr/reprocess')
   @SerializeOptions({ type: DocumentStatusResponseDto })
-  reprocessOcr(
+  async reprocessOcr(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentStatusResponse> {
-    return this.documentsService.reprocessOcr(
+    const response = await this.documentsService.reprocessOcr(
       request.user.sub,
       documentId,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_OCR_REPROCESS,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: documentId,
+      summary: 'Document OCR reprocess requested.',
+      after: { ocrStatus: response.ocrStatus },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return response;
   }
 
   @Post(':id/jobs/:jobId/restart')
   @SerializeOptions({ type: DocumentStatusResponseDto })
-  restartJob(
+  async restartJob(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
     @Param('jobId', ParseUUIDPipe) jobId: string,
   ): Promise<DocumentStatusResponse> {
-    return this.documentsService.restartJob(
+    const response = await this.documentsService.restartJob(
       request.user.sub,
       documentId,
       jobId,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_JOB_RESTART,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: documentId,
+      summary: `Document job restarted: ${jobId}`,
+      after: { jobId, status: response.status, ocrStatus: response.ocrStatus },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return response;
   }
 
   @Get(':id/bookmarks')
@@ -402,42 +572,81 @@ export class DocumentsController {
   }
 
   @Delete(':id')
-  deleteDocument(
+  async deleteDocument(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<void> {
-    return this.documentsService.deleteDocument(
+    await this.documentsService.deleteDocument(
       request.user.sub,
       documentId,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.DOCUMENT_DELETE,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: documentId,
+      summary: 'Document deleted.',
+      before: { documentId },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
   }
 }
 
 @Controller('public/documents')
 @SerializeOptions({ strategy: 'excludeAll' })
 export class PublicDocumentsController {
-  constructor(private readonly documentsService: DocumentsService) {}
+  constructor(
+    private readonly documentsService: DocumentsService,
+    private readonly auditLogsService: AuditLogsService,
+  ) {}
 
   @Get(':id')
   @SerializeOptions({ type: DocumentResponseDto })
-  getPublicDocument(
+  async getPublicDocument(
+    @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentDetail> {
-    return this.documentsService.getPublicDocument(documentId);
+    const document = await this.documentsService.getPublicDocument(documentId);
+
+    await this.auditLogsService.record({
+      actorId: null,
+      action: AuditAction.DOCUMENT_READ,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: document.id,
+      summary: `Public document read: ${document.title}`,
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return document;
   }
 
   @Get(':id/view')
   @SerializeOptions({ type: DocumentViewResponseDto })
-  createPublicViewUrl(
+  async createPublicViewUrl(
+    @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentViewResponse> {
-    return this.documentsService.createPublicViewUrl(documentId);
+    const response =
+      await this.documentsService.createPublicViewUrl(documentId);
+
+    await this.auditLogsService.record({
+      actorId: null,
+      action: AuditAction.DOCUMENT_VIEW,
+      resourceType: AuditResourceType.DOCUMENT,
+      resourceId: response.documentId,
+      summary: 'Public document view URL created.',
+      after: { isLinearized: response.isLinearized },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return response;
   }
 
   @Get(':id/preview')
   @SerializeOptions({ type: DocumentPreviewResponseDto })
-  createPublicPreviewUrl(
+  async createPublicPreviewUrl(
     @Param('id', ParseUUIDPipe) documentId: string,
   ): Promise<DocumentPreviewResponse> {
     return this.documentsService.createPublicPreviewUrl(documentId);

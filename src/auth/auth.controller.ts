@@ -8,7 +8,8 @@ import {
   SerializeOptions,
   UseGuards,
 } from '@nestjs/common';
-import { User } from '@prisma/client';
+import { AuditAction, AuditResourceType, User } from '@prisma/client';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { AuthService } from './auth.service';
 import { AuthenticatedUserResponseDto } from './dto/authenticated-user-response.dto';
 import { AuthTokenResponseDto } from './dto/auth-token-response.dto';
@@ -22,7 +23,10 @@ import type { AuthenticatedRequest } from './interfaces/authenticated-request.in
 @Controller('auth/oidc')
 @SerializeOptions({ strategy: 'excludeAll' })
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly auditLogsService: AuditLogsService,
+  ) {}
 
   @Get('authorize')
   @SerializeOptions({ type: OidcAuthorizationResponseDto })
@@ -32,16 +36,53 @@ export class AuthController {
 
   @Get('callback')
   @SerializeOptions({ type: AuthTokenResponseDto })
-  authorizeCallback(
+  async authorizeCallback(
+    @Req() request: AuthenticatedRequest,
     @Query() query: OidcCallbackQueryDto,
   ): Promise<AuthTokenResponse> {
-    return this.authService.authorizeCallback(query.code, query.state);
+    const response = await this.authService.authorizeCallback(
+      query.code,
+      query.state,
+    );
+
+    await this.auditLogsService.record({
+      actorId: response.user.id,
+      action: AuditAction.AUTH_LOGIN,
+      resourceType: AuditResourceType.AUTH,
+      resourceId: response.user.id,
+      summary: 'OIDC login succeeded.',
+      after: {
+        userId: response.user.id,
+        role: response.user.role,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return response;
   }
 
   @Post('refresh')
   @SerializeOptions({ type: AuthTokenResponseDto })
-  refreshToken(@Body() dto: RefreshTokenDto): Promise<AuthTokenResponse> {
-    return this.authService.refreshToken(dto.refreshToken);
+  async refreshToken(
+    @Req() request: AuthenticatedRequest,
+    @Body() dto: RefreshTokenDto,
+  ): Promise<AuthTokenResponse> {
+    const response = await this.authService.refreshToken(dto.refreshToken);
+
+    await this.auditLogsService.record({
+      actorId: response.user.id,
+      action: AuditAction.AUTH_REFRESH,
+      resourceType: AuditResourceType.AUTH,
+      resourceId: response.user.id,
+      summary: 'Refresh token succeeded.',
+      after: {
+        userId: response.user.id,
+        role: response.user.role,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return response;
   }
 
   @Get('me')

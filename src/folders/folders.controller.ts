@@ -12,7 +12,13 @@ import {
   SerializeOptions,
   UseGuards,
 } from '@nestjs/common';
-import { Folder, FolderPermission } from '@prisma/client';
+import {
+  AuditAction,
+  AuditResourceType,
+  Folder,
+  FolderPermission,
+} from '@prisma/client';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../auth/interfaces/authenticated-request.interface';
 import { CreateFolderDto } from './dto/create-folder.dto';
@@ -27,15 +33,33 @@ import { FoldersService } from './folders.service';
 @UseGuards(JwtAuthGuard)
 @SerializeOptions({ strategy: 'excludeAll' })
 export class FoldersController {
-  constructor(private readonly foldersService: FoldersService) {}
+  constructor(
+    private readonly foldersService: FoldersService,
+    private readonly auditLogsService: AuditLogsService,
+  ) {}
 
   @Post()
   @SerializeOptions({ type: FolderResponseDto })
-  createFolder(
+  async createFolder(
     @Req() request: AuthenticatedRequest,
     @Body() dto: CreateFolderDto,
   ): Promise<Folder> {
-    return this.foldersService.createFolder(request.user.sub, dto);
+    const folder = await this.foldersService.createFolder(
+      request.user.sub,
+      dto,
+    );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_CREATE,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folder.id,
+      summary: `Folder created: ${folder.name}`,
+      after: { name: folder.name },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return folder;
   }
 
   @Get()
@@ -72,105 +96,191 @@ export class FoldersController {
 
   @Patch(':id')
   @SerializeOptions({ type: FolderResponseDto })
-  updateFolder(
+  async updateFolder(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) folderId: string,
     @Body() dto: UpdateFolderDto,
   ): Promise<Folder> {
-    return this.foldersService.updateFolder(
+    const folder = await this.foldersService.updateFolder(
       request.user.sub,
       folderId,
       dto,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_UPDATE,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folder.id,
+      summary: `Folder updated: ${folder.name}`,
+      after: { name: folder.name },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return folder;
   }
 
   @Patch(':id/public-access')
   @SerializeOptions({ type: FolderResponseDto })
-  updatePublicAccess(
+  async updatePublicAccess(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) folderId: string,
     @Body() dto: UpdateFolderPublicAccessDto,
   ): Promise<Folder> {
-    return this.foldersService.updatePublicAccess(
+    const folder = await this.foldersService.updatePublicAccess(
       request.user.sub,
       request.user.role,
       folderId,
       dto.isPublic,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_PUBLIC_ACCESS_UPDATE,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folder.id,
+      summary: `Folder public access ${folder.isPublic ? 'enabled' : 'disabled'}.`,
+      after: { isPublic: folder.isPublic },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return folder;
   }
 
   @Put(':id/permissions/groups/:groupId')
   @SerializeOptions({ type: FolderPermissionResponseDto })
-  saveGroupPermission(
+  async saveGroupPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) folderId: string,
     @Param('groupId', ParseUUIDPipe) groupId: string,
     @Body() dto: SaveFolderPermissionDto,
   ): Promise<FolderPermission> {
-    return this.foldersService.saveGroupPermission(
+    const permission = await this.foldersService.saveGroupPermission(
       request.user.sub,
       request.user.role,
       folderId,
       groupId,
       dto.permission,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_PERMISSION_GRANT,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folderId,
+      summary: `Folder group permission granted to ${groupId}.`,
+      after: {
+        permissionId: permission.id,
+        groupId,
+        permission: permission.permission,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return permission;
   }
 
   @Delete(':id/permissions/groups/:groupId')
-  removeGroupPermission(
+  async removeGroupPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) folderId: string,
     @Param('groupId', ParseUUIDPipe) groupId: string,
   ): Promise<void> {
-    return this.foldersService.removeGroupPermission(
+    await this.foldersService.removeGroupPermission(
       request.user.sub,
       request.user.role,
       folderId,
       groupId,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_PERMISSION_REVOKE,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folderId,
+      summary: `Folder group permission revoked from ${groupId}.`,
+      before: { groupId },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
   }
 
   @Put(':id/permissions/users/:userId')
   @SerializeOptions({ type: FolderPermissionResponseDto })
-  saveUserPermission(
+  async saveUserPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) folderId: string,
     @Param('userId', ParseUUIDPipe) targetUserId: string,
     @Body() dto: SaveFolderPermissionDto,
   ): Promise<FolderPermission> {
-    return this.foldersService.saveUserPermission(
+    const permission = await this.foldersService.saveUserPermission(
       request.user.sub,
       request.user.role,
       folderId,
       targetUserId,
       dto.permission,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_PERMISSION_GRANT,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folderId,
+      summary: `Folder user permission granted to ${targetUserId}.`,
+      after: {
+        permissionId: permission.id,
+        userId: targetUserId,
+        permission: permission.permission,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return permission;
   }
 
   @Delete(':id/permissions/users/:userId')
-  removeUserPermission(
+  async removeUserPermission(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) folderId: string,
     @Param('userId', ParseUUIDPipe) targetUserId: string,
   ): Promise<void> {
-    return this.foldersService.removeUserPermission(
+    await this.foldersService.removeUserPermission(
       request.user.sub,
       request.user.role,
       folderId,
       targetUserId,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_PERMISSION_REVOKE,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folderId,
+      summary: `Folder user permission revoked from ${targetUserId}.`,
+      before: { userId: targetUserId },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
   }
 
   @Delete(':id')
-  deleteFolder(
+  async deleteFolder(
     @Req() request: AuthenticatedRequest,
     @Param('id', ParseUUIDPipe) folderId: string,
   ): Promise<void> {
-    return this.foldersService.deleteFolder(
+    await this.foldersService.deleteFolder(
       request.user.sub,
       folderId,
       request.user.role,
     );
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.FOLDER_DELETE,
+      resourceType: AuditResourceType.FOLDER,
+      resourceId: folderId,
+      summary: 'Folder deleted.',
+      before: { folderId },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
   }
 }

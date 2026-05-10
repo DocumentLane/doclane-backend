@@ -8,7 +8,13 @@ import {
   SerializeOptions,
   UseGuards,
 } from '@nestjs/common';
-import { UserRole, WorkerSettings } from '@prisma/client';
+import {
+  AuditAction,
+  AuditResourceType,
+  UserRole,
+  WorkerSettings,
+} from '@prisma/client';
+import { AuditLogsService } from '../audit-logs/audit-logs.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AuthenticatedRequest } from '../auth/interfaces/authenticated-request.interface';
 import { UpdateWorkerSettingsDto } from './dto/update-worker-settings.dto';
@@ -19,7 +25,10 @@ import { WorkerSettingsService } from './worker-settings.service';
 @UseGuards(JwtAuthGuard)
 @SerializeOptions({ strategy: 'excludeAll', type: WorkerSettingsResponseDto })
 export class WorkerSettingsController {
-  constructor(private readonly workerSettingsService: WorkerSettingsService) {}
+  constructor(
+    private readonly workerSettingsService: WorkerSettingsService,
+    private readonly auditLogsService: AuditLogsService,
+  ) {}
 
   @Get()
   getSettings(): Promise<WorkerSettings> {
@@ -27,7 +36,7 @@ export class WorkerSettingsController {
   }
 
   @Patch()
-  updateSettings(
+  async updateSettings(
     @Req() request: AuthenticatedRequest,
     @Body() dto: UpdateWorkerSettingsDto,
   ): Promise<WorkerSettings> {
@@ -35,6 +44,23 @@ export class WorkerSettingsController {
       throw new ForbiddenException('Only admins can update worker settings.');
     }
 
-    return this.workerSettingsService.updateSettings(dto);
+    const settings = await this.workerSettingsService.updateSettings(dto);
+
+    await this.auditLogsService.record({
+      actorId: request.user.sub,
+      action: AuditAction.WORKER_SETTINGS_UPDATE,
+      resourceType: AuditResourceType.WORKER_SETTINGS,
+      resourceId: settings.id,
+      summary: 'Worker settings updated.',
+      after: {
+        ocrLanguage: settings.ocrLanguage,
+        ocrDpi: settings.ocrDpi,
+        ocrPsm: settings.ocrPsm,
+        ocrPdfOutputEnabled: settings.ocrPdfOutputEnabled,
+      },
+      ...this.auditLogsService.createRequestMetadata(request),
+    });
+
+    return settings;
   }
 }

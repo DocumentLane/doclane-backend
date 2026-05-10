@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { BullModule } from '@nestjs/bullmq';
 import { ConfigModule } from '@nestjs/config';
 import { ConfigService } from '@nestjs/config';
+import { AuditLogsModule } from './audit-logs/audit-logs.module';
 import { AuthModule } from './auth/auth.module';
 import { appConfig } from './config/configs/app.config';
 import { authConfig } from './config/configs/auth.config';
@@ -50,6 +51,7 @@ import { WorkerSettingsModule } from './worker-settings/worker-settings.module';
       }),
     }),
     PrismaModule,
+    AuditLogsModule,
     RedisModule,
     S3Module,
     AuthModule,

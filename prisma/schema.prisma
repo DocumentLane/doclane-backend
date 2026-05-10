@@ -71,6 +71,41 @@ enum ResourcePermission {
   READ
 }
 
+enum AuditAction {
+  AUTH_LOGIN
+  AUTH_REFRESH
+  DOCUMENT_CREATE_UPLOAD_SESSION
+  DOCUMENT_COMPLETE_UPLOAD
+  DOCUMENT_READ
+  DOCUMENT_VIEW
+  DOCUMENT_UPDATE
+  DOCUMENT_DELETE
+  DOCUMENT_PUBLIC_ACCESS_UPDATE
+  DOCUMENT_PERMISSION_GRANT
+  DOCUMENT_PERMISSION_REVOKE
+  DOCUMENT_OCR_REPROCESS
+  DOCUMENT_JOB_RESTART
+  FOLDER_CREATE
+  FOLDER_UPDATE
+  FOLDER_DELETE
+  FOLDER_PUBLIC_ACCESS_UPDATE
+  FOLDER_PERMISSION_GRANT
+  FOLDER_PERMISSION_REVOKE
+  USER_UPDATE
+  GROUP_CREATE
+  GROUP_UPDATE
+  WORKER_SETTINGS_UPDATE
+}
+
+enum AuditResourceType {
+  AUTH
+  DOCUMENT
+  FOLDER
+  USER
+  GROUP
+  WORKER_SETTINGS
+}
+
 model User {
   id           String   @id @default(uuid())
   oidcIssuer   String
@@ -91,9 +126,32 @@ model User {
   documentBookmarks DocumentBookmark[]
   documentNotes DocumentNote[]
   documentReadingPositions DocumentReadingPosition[]
+  auditLogs AuditLog[]
 
   @@unique([oidcIssuer, oidcSubject])
   @@index([email])
+}
+
+model AuditLog {
+  id           String            @id @default(uuid())
+  actorId      String?
+  action       AuditAction
+  resourceType AuditResourceType
+  resourceId   String?
+  summary      String?           @db.Text
+  before       Json?
+  after        Json?
+  ipAddress    String?
+  userAgent    String?           @db.Text
+  createdAt    DateTime          @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorId, createdAt])
+  @@index([resourceType, resourceId, createdAt])
+  @@index([action, createdAt])
+  @@map("audit_logs")
 }
 
 model OidcAuthorizationState {

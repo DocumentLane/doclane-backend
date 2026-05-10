@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
+import { AuthModule } from '../auth/auth.module';
 import { WorkerSettingsController } from './worker-settings.controller';
 import { WorkerSettingsService } from './worker-settings.service';
-import { AuthModule } from 'src/auth/auth.module';
 
 @Module({
   imports: [AuthModule],
