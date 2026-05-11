@@ -2,6 +2,13 @@ import Joi from 'joi';
 
 export const environmentValidationSchema = Joi.object({
   PORT: Joi.number().integer().min(1).default(3000),
+  TRUST_PROXY: Joi.alternatives()
+    .try(
+      Joi.boolean().truthy('true').falsy('false'),
+      Joi.number().integer().min(0),
+      Joi.string().trim().min(1),
+    )
+    .default(false),
   DATABASE_URL: Joi.string().uri().optional(),
   OIDC_ISSUER_URL: Joi.string().uri().optional(),
   OIDC_CLIENT_ID: Joi.string().optional(),

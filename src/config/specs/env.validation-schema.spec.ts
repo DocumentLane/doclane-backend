@@ -9,6 +9,7 @@ describe('environmentValidationSchema', () => {
     expect(result.error).toBeUndefined();
     expect(result.value).toMatchObject({
       PORT: 3000,
+      TRUST_PROXY: false,
       OIDC_GROUPS_CLAIM: 'groups',
       PDF_OCR_LANGUAGE: 'eng',
       PDF_OCR_DPI: 300,
@@ -23,5 +24,17 @@ describe('environmentValidationSchema', () => {
     });
 
     expect(result.error).toBeDefined();
+  });
+
+  it('accepts Express trust proxy values', () => {
+    expect(
+      environmentValidationSchema.validate({ TRUST_PROXY: 'true' }).error,
+    ).toBeUndefined();
+    expect(
+      environmentValidationSchema.validate({ TRUST_PROXY: '1' }).error,
+    ).toBeUndefined();
+    expect(
+      environmentValidationSchema.validate({ TRUST_PROXY: 'loopback' }).error,
+    ).toBeUndefined();
   });
 });
