@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-bookworm-slim AS deps
+FROM node:22.23.4-bookworm-slim AS deps
 
 WORKDIR /app
 
@@ -29,7 +29,7 @@ RUN pnpm prisma:generate
 RUN pnpm build
 RUN pnpm prune --prod
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.23.4-bookworm-slim AS runtime
 
 WORKDIR /app
 
